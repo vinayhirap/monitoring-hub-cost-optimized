@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+
+# Environment / secrets
+.env
+.env.production
+
+# Node
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.continue/
+
+# Backups
+_backup_endpoints_20260426_031023/
+_backup_20260426_030352/
+_backup_20260426_030452/
+
+# Database dumps
+db/monitoring_hub_dump.sql
+monitoring_hub_dump.sql
+*.sql.bak
+
+
+.continue/
+
+_backup_20260426_030352/
+_backup_20260426_030452/
+_backup_endpoints_20260426_031023/

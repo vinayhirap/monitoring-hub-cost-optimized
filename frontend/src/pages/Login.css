@@ -1,0 +1,332 @@
+/* src/pages/Login.css */
+
+.login-root {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #060c17;
+  position: relative;
+  overflow: hidden;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+
+/* ── animated grid ── */
+.login-grid {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  grid-template-rows: repeat(8, 1fr);
+  opacity: 0.06;
+  pointer-events: none;
+}
+.login-grid-cell {
+  border: 1px solid rgba(0, 199, 255, 0.5);
+  animation: grid-pulse 4s ease-in-out infinite;
+}
+.login-grid-cell:nth-child(3n)  { animation-delay: 0.5s; }
+.login-grid-cell:nth-child(5n)  { animation-delay: 1.2s; }
+.login-grid-cell:nth-child(7n)  { animation-delay: 2.1s; }
+.login-grid-cell:nth-child(11n) { animation-delay: 0.8s; }
+@keyframes grid-pulse {
+  0%, 100% { opacity: 0.3; }
+  50%       { opacity: 1; }
+}
+
+/* ── glow blobs ── */
+.login-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  pointer-events: none;
+  animation: blob-drift 8s ease-in-out infinite;
+}
+.login-blob-1 {
+  width: 400px;
+  height: 400px;
+  background: rgba(0, 199, 255, 0.07);
+  top: -100px;
+  right: -80px;
+}
+.login-blob-2 {
+  width: 300px;
+  height: 300px;
+  background: rgba(0, 229, 160, 0.06);
+  bottom: -60px;
+  left: -60px;
+  animation-delay: 3s;
+}
+@keyframes blob-drift {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33%       { transform: translate(20px, -20px) scale(1.05); }
+  66%       { transform: translate(-15px, 15px) scale(0.97); }
+}
+
+/* ── card ── */
+.login-card {
+  position: relative;
+  z-index: 10;
+  width: 100%;
+  max-width: 420px;
+  background: rgba(10, 18, 32, 0.92);
+  border: 1px solid rgba(0, 199, 255, 0.15);
+  border-radius: 16px;
+  padding: 40px 36px 32px;
+  box-shadow:
+    0 0 0 1px rgba(0,199,255,0.05),
+    0 24px 64px rgba(0, 0, 0, 0.6),
+    0 0 80px rgba(0,199,255,0.04);
+  backdrop-filter: blur(12px);
+  animation: card-in 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes card-in {
+  from { opacity: 0; transform: translateY(24px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ── brand ── */
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 28px;
+}
+.login-logo {
+  flex-shrink: 0;
+}
+.login-brand-name {
+  font-size: 18px;
+  font-weight: 700;
+  color: #e2e8f0;
+  letter-spacing: 0.05em;
+  line-height: 1.2;
+}
+.login-brand-sub {
+  font-size: 10px;
+  color: rgba(99, 130, 190, 0.7);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-top: 2px;
+}
+
+/* ── headings ── */
+.login-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: #e2e8f0;
+  margin: 0 0 6px;
+  letter-spacing: -0.01em;
+}
+.login-desc {
+  font-size: 12px;
+  color: rgba(99, 130, 190, 0.7);
+  margin: 0 0 28px;
+  line-height: 1.5;
+  font-family: -apple-system, 'Segoe UI', sans-serif;
+}
+
+/* ── form ── */
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.login-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.login-field label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: rgba(99, 130, 190, 0.8);
+}
+.login-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.login-input-icon {
+  position: absolute;
+  left: 12px;
+  color: rgba(99, 130, 190, 0.5);
+  display: flex;
+  pointer-events: none;
+}
+.login-input {
+  width: 100%;
+  background: rgba(5, 12, 24, 0.8);
+  border: 1px solid rgba(99, 130, 190, 0.2);
+  border-radius: 8px;
+  padding: 11px 40px 11px 36px;
+  color: #e2e8f0;
+  font-size: 13px;
+  font-family: 'JetBrains Mono', monospace;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  outline: none;
+  box-sizing: border-box;
+}
+.login-input::placeholder {
+  color: rgba(99, 130, 190, 0.3);
+}
+.login-input:focus {
+  border-color: rgba(0, 199, 255, 0.5);
+  box-shadow: 0 0 0 3px rgba(0, 199, 255, 0.08);
+}
+.login-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.login-toggle-pw {
+  position: absolute;
+  right: 12px;
+  background: none;
+  border: none;
+  color: rgba(99, 130, 190, 0.5);
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  transition: color 0.15s;
+}
+.login-toggle-pw:hover { color: rgba(99, 130, 190, 0.9); }
+
+/* ── error ── */
+.login-error {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: rgba(255, 77, 109, 0.1);
+  border: 1px solid rgba(255, 77, 109, 0.25);
+  border-radius: 7px;
+  color: #ff6b8a;
+  font-size: 12px;
+  padding: 10px 12px;
+  font-family: -apple-system, 'Segoe UI', sans-serif;
+}
+
+/* ── submit button ── */
+.login-btn {
+  margin-top: 4px;
+  width: 100%;
+  padding: 13px;
+  background: linear-gradient(135deg, #00c7ff 0%, #0099cc 100%);
+  color: #060c17;
+  font-weight: 700;
+  font-size: 13px;
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.05em;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: opacity 0.2s, transform 0.15s, box-shadow 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  box-shadow: 0 4px 20px rgba(0, 199, 255, 0.25);
+}
+.login-btn:hover:not(:disabled) {
+  opacity: 0.92;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 28px rgba(0, 199, 255, 0.35);
+}
+.login-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+.login-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+.login-btn-loading {
+  background: linear-gradient(135deg, rgba(0,199,255,0.6) 0%, rgba(0,153,204,0.6) 100%);
+}
+.login-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(6, 12, 23, 0.3);
+  border-top-color: #060c17;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── demo hint box ── */
+.login-hint {
+  margin-top: 24px;
+  background: rgba(0, 199, 255, 0.04);
+  border: 1px solid rgba(0, 199, 255, 0.1);
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+.login-hint-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: rgba(99, 130, 190, 0.6);
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+.login-hint-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: rgba(99, 130, 190, 0.8);
+  font-family: 'JetBrains Mono', monospace;
+  margin-bottom: 6px;
+}
+.login-hint-row:last-child { margin-bottom: 0; }
+.login-hint-row code {
+  background: rgba(99, 130, 190, 0.12);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 11px;
+  color: #e2e8f0;
+}
+.login-hint-role {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border-radius: 4px;
+  padding: 2px 7px;
+  min-width: 48px;
+  text-align: center;
+}
+.login-hint-role.admin  {
+  background: rgba(249,115,22,0.15);
+  color: #fb923c;
+  border: 1px solid rgba(249,115,22,0.25);
+}
+.login-hint-role.viewer {
+  background: rgba(59,130,246,0.15);
+  color: #60a5fa;
+  border: 1px solid rgba(59,130,246,0.25);
+}
+
+/* ── ServiceDetail light mode fixes ── */
+[data-theme="light"] .inst-table-wrap    { background: #ffffff; border-color: rgba(99,130,190,0.15); box-shadow: 0 1px 4px rgba(99,130,190,0.08); }
+[data-theme="light"] .inst-table thead  { background: #f0f4fa; }
+[data-theme="light"] .inst-table th     { color: #6b84a8; border-bottom-color: rgba(99,130,190,0.15); }
+[data-theme="light"] .inst-table td     { border-bottom-color: rgba(99,130,190,0.08); color: #0f1c35; }
+[data-theme="light"] .inst-row:hover    { background: rgba(0,119,204,0.03); }
+[data-theme="light"] .inst-selected     { background: rgba(0,119,204,0.06) !important; }
+
+/* Search + toolbar */
+[data-theme="light"] .inst-search       { background: #ffffff; border-color: rgba(99,130,190,0.2); color: #0f1c35; box-shadow: 0 1px 3px rgba(99,130,190,0.08); }
+[data-theme="light"] .sf-btn            { background: #ffffff; border-color: rgba(99,130,190,0.2); color: #4a6080; box-shadow: 0 1px 3px rgba(99,130,190,0.06); }
+[data-theme="light"] .sort-select       { background: #ffffff; border-color: rgba(99,130,190,0.2); color: #4a6080; box-shadow: 0 1px 3px rgba(99,130,190,0.06); }
+
+/* Breadcrumb bar */
+[data-theme="light"] .detail-page       { background: transparent; }
+[data-theme="light"] .detail-header h1  { color: #0f1c35; }
+
+/* Make page bg consistent */
+[data-theme="light"] .main-content      { background: #eef2f8; }

@@ -1,0 +1,30 @@
+version: "3.9"
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: monitoring-mysql
+    restart: unless-stopped
+    ports:
+      - "3307:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+  redis:
+    image: redis:7-alpine
+    container_name: monitoring-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+
+volumes:
+  mysql_data:
+  redis_data:
