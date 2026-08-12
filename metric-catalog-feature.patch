@@ -1,0 +1,1804 @@
+diff --git a/app/api/admin/accounts.py b/app/api/admin/accounts.py
+index 432f679..a6d90e0 100644
+--- a/app/api/admin/accounts.py
++++ b/app/api/admin/accounts.py
+@@ -95,6 +95,11 @@ def add_account(payload: dict = Body(...)):
+     if role_arn.lower() in ["n/a", "none", "na", ""]:
+         role_arn = ""
+ 
++    # Optional: list of metric_catalog IDs the user picked in the onboarding
++    # wizard's "Metrics to Monitor" step. If omitted, the recommended default
++    # template is applied automatically.
++    selected_metric_ids = payload.get("selected_metric_ids")
++
+     conn   = get_connection()
+     cursor = conn.cursor()
+     try:
+@@ -112,13 +117,28 @@ def add_account(payload: dict = Body(...)):
+               environment    = VALUES(environment)
+         """, (account_name, account_id, role_arn, external_id, region, description, owner_team, environment))
+         conn.commit()
+-        new_id = cursor.lastrowid or 0
++
++        if cursor.lastrowid:
++            new_id = cursor.lastrowid
++        else:
++            cursor.execute("SELECT id FROM aws_accounts WHERE account_id = %s", (account_id,))
++            new_id = cursor.fetchone()[0]
+     except Exception as e:
+         raise HTTPException(status_code=500, detail=f"DB error: {str(e)}")
+     finally:
+         cursor.close()
+         conn.close()
+ 
++    try:
++        from app.api.metric_catalog import seed_account_defaults
++        if selected_metric_ids:
++            from app.api.metric_catalog import set_account_metrics
++            set_account_metrics(new_id, {"enabled_metric_ids": selected_metric_ids})
++        else:
++            seed_account_defaults(new_id)
++    except Exception as e:
++        print(f"Metric template seed error: {e}")
++
+     _bust_accounts_cache()
+     _write_audit("admin", "Account onboarded", f"{account_name} ({account_id}) region={region}")
+     return {"status": "added", "id": new_id, "account_name": account_name}
+diff --git a/app/api/metric_catalog.py b/app/api/metric_catalog.py
+new file mode 100644
+index 0000000..f6795a6
+--- /dev/null
++++ b/app/api/metric_catalog.py
+@@ -0,0 +1,402 @@
++# app/api/metric_catalog.py
++"""
++CloudWatch metric catalog + per-account metric selection.
++
++  GET  /api/metric-catalog                  full catalog, filterable/searchable
++  GET  /api/metric-catalog/services          distinct services for filter chips
++  GET  /api/metric-catalog/default-template  recommended metric ids (onboarding default)
++  GET  /api/account-metrics/{account_id}     catalog merged with this account's enabled flags
++  PUT  /api/account-metrics/{account_id}     replace this account's full selection
++  POST /api/account-metrics/{account_id}/apply-default   reset to recommended template
++  POST /api/account-metrics/{account_id}/discover        live ListMetrics for a directory namespace
++  GET  /api/account-metrics/{account_id}/yace-config      generate a YACE discovery config.yml for this account's selection
++"""
++from fastapi import APIRouter, HTTPException, Body, Query, Response
++from app.db import get_connection
++import datetime
++import json
++import logging
++import yaml
++
++logger = logging.getLogger(__name__)
++router = APIRouter(tags=["Metric Catalog"])
++
++
++def _ser(obj):
++    if isinstance(obj, (datetime.datetime, datetime.date)):
++        return obj.isoformat()
++    if isinstance(obj, dict):
++        return {k: _ser(v) for k, v in obj.items()}
++    if isinstance(obj, list):
++        return [_ser(i) for i in obj]
++    return obj
++
++
++def _write_audit(actor, action, detail):
++    try:
++        conn = get_connection(); cur = conn.cursor()
++        cur.execute(
++            "INSERT INTO audit_logs (actor, action, payload) VALUES (%s,%s,%s)",
++            (actor, action, json.dumps({"detail": detail}))
++        )
++        conn.commit(); cur.close(); conn.close()
++    except Exception as e:
++        logger.warning(f"Audit: {e}")
++
++
++# ── Catalog browsing ─────────────────────────────────────────────
++
++@router.get("/api/metric-catalog")
++def get_catalog(
++    category: str = Query(None, description="core | extended | directory"),
++    service:  str = Query(None, description="service key, e.g. ec2"),
++    search:   str = Query(None, description="matches metric name, service, or description"),
++):
++    conn = get_connection(); cur = conn.cursor(dictionary=True)
++    clauses, params = [], []
++    if category:
++        clauses.append("category = %s"); params.append(category)
++    if service:
++        clauses.append("service = %s"); params.append(service)
++    if search:
++        clauses.append("(metric_name LIKE %s OR display_service LIKE %s OR description LIKE %s)")
++        like = f"%{search}%"
++        params += [like, like, like]
++    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
++    cur.execute(f"""
++        SELECT id, service, namespace, display_service, metric_name,
++               statistic, unit, category, description, is_default, enabled
++        FROM metric_catalog
++        {where}
++        ORDER BY category = 'core' DESC, category = 'extended' DESC,
++                 display_service, metric_name
++    """, params)
++    rows = cur.fetchall(); cur.close(); conn.close()
++
++    # Group by service for the frontend accordion
++    grouped = {}
++    for r in rows:
++        key = r["service"]
++        if key not in grouped:
++            grouped[key] = {
++                "service":         key,
++                "display_service": r["display_service"],
++                "namespace":       r["namespace"],
++                "category":        r["category"],
++                "metrics":         [],
++            }
++        if r["metric_name"]:  # skip the '' directory placeholder row itself
++            grouped[key]["metrics"].append(_ser({
++                "id": r["id"], "metric_name": r["metric_name"],
++                "statistic": r["statistic"], "unit": r["unit"],
++                "description": r["description"], "is_default": bool(r["is_default"]),
++            }))
++        else:
++            grouped[key]["directory_id"] = r["id"]
++
++    return sorted(grouped.values(), key=lambda g: (g["category"] != "core", g["category"] != "extended", g["display_service"] or ""))
++
++
++@router.get("/api/metric-catalog/services")
++def get_services():
++    conn = get_connection(); cur = conn.cursor(dictionary=True)
++    cur.execute("""
++        SELECT service, display_service, namespace, category, COUNT(*) AS metric_count
++        FROM metric_catalog
++        WHERE metric_name != '' OR metric_name IS NULL
++        GROUP BY service, display_service, namespace, category
++        ORDER BY category = 'core' DESC, category = 'extended' DESC, display_service
++    """)
++    rows = cur.fetchall(); cur.close(); conn.close()
++    return [_ser(r) for r in rows]
++
++
++@router.get("/api/metric-catalog/default-template")
++def get_default_template():
++    conn = get_connection(); cur = conn.cursor(dictionary=True)
++    cur.execute("""
++        SELECT id, service, display_service, metric_name
++        FROM metric_catalog
++        WHERE is_default = 1
++        ORDER BY display_service, metric_name
++    """)
++    rows = cur.fetchall(); cur.close(); conn.close()
++    return [_ser(r) for r in rows]
++
++
++# ── Per-account selection ────────────────────────────────────────
++
++def _default_metric_ids(cur) -> list:
++    cur.execute("SELECT id FROM metric_catalog WHERE is_default = 1")
++    return [r[0] for r in cur.fetchall()]
++
++
++def seed_account_defaults(account_id: int):
++    """Called by admin/accounts.py right after a new account is onboarded."""
++    conn = get_connection(); cur = conn.cursor()
++    ids = _default_metric_ids(cur)
++    for mid in ids:
++        cur.execute("""
++            INSERT IGNORE INTO account_metric_selections
++                (aws_account_id, metric_id, enabled, source)
++            VALUES (%s, %s, 1, 'template')
++        """, (account_id, mid))
++    conn.commit(); cur.close(); conn.close()
++    return len(ids)
++
++
++@router.get("/api/account-metrics/{account_id}")
++def get_account_metrics(account_id: int):
++    conn = get_connection(); cur = conn.cursor(dictionary=True)
++    cur.execute("SELECT id FROM aws_accounts WHERE id = %s", (account_id,))
++    if not cur.fetchone():
++        cur.close(); conn.close()
++        raise HTTPException(status_code=404, detail="Account not found")
++
++    cur.execute("""
++        SELECT mc.id, mc.service, mc.namespace, mc.display_service, mc.metric_name,
++               mc.statistic, mc.unit, mc.category, mc.description, mc.is_default,
++               COALESCE(ams.enabled, 0) AS enabled,
++               ams.source
++        FROM metric_catalog mc
++        LEFT JOIN account_metric_selections ams
++               ON ams.metric_id = mc.id AND ams.aws_account_id = %s
++        WHERE mc.metric_name != '' OR mc.metric_name IS NULL
++        ORDER BY mc.category = 'core' DESC, mc.category = 'extended' DESC,
++                 mc.display_service, mc.metric_name
++    """, (account_id,))
++    rows = cur.fetchall(); cur.close(); conn.close()
++
++    grouped = {}
++    for r in rows:
++        key = r["service"]
++        if key not in grouped:
++            grouped[key] = {
++                "service": key, "display_service": r["display_service"],
++                "namespace": r["namespace"], "category": r["category"],
++                "metrics": [],
++            }
++        if r["metric_name"]:
++            grouped[key]["metrics"].append(_ser({
++                "id": r["id"], "metric_name": r["metric_name"],
++                "statistic": r["statistic"], "unit": r["unit"],
++                "description": r["description"], "is_default": bool(r["is_default"]),
++                "enabled": bool(r["enabled"]),
++            }))
++        else:
++            grouped[key]["directory_id"] = r["id"]
++
++    return sorted(grouped.values(), key=lambda g: (g["category"] != "core", g["category"] != "extended", g["display_service"] or ""))
++
++
++@router.put("/api/account-metrics/{account_id}")
++def set_account_metrics(account_id: int, payload: dict = Body(...)):
++    """
++    Full-replace selection for this account.
++    Body: { "enabled_metric_ids": [1, 2, 3, ...] }
++    """
++    enabled_ids = set(int(i) for i in payload.get("enabled_metric_ids", []))
++
++    conn = get_connection(); cur = conn.cursor(dictionary=True)
++    cur.execute("SELECT id FROM aws_accounts WHERE id = %s", (account_id,))
++    if not cur.fetchone():
++        cur.close(); conn.close()
++        raise HTTPException(status_code=404, detail="Account not found")
++
++    cur.execute("SELECT metric_id FROM account_metric_selections WHERE aws_account_id = %s", (account_id,))
++    existing_ids = {r["metric_id"] for r in cur.fetchall()}
++    cur.close()
++
++    cur = conn.cursor()
++    to_add    = enabled_ids - existing_ids
++    to_enable = enabled_ids & existing_ids
++    to_remove = existing_ids - enabled_ids
++
++    for mid in to_add:
++        cur.execute("""
++            INSERT INTO account_metric_selections (aws_account_id, metric_id, enabled, source)
++            VALUES (%s, %s, 1, 'manual')
++        """, (account_id, mid))
++    if to_enable:
++        cur.execute(f"""
++            UPDATE account_metric_selections SET enabled = 1
++            WHERE aws_account_id = %s AND metric_id IN ({','.join(['%s']*len(to_enable))})
++        """, (account_id, *to_enable))
++    if to_remove:
++        cur.execute(f"""
++            UPDATE account_metric_selections SET enabled = 0
++            WHERE aws_account_id = %s AND metric_id IN ({','.join(['%s']*len(to_remove))})
++        """, (account_id, *to_remove))
++
++    conn.commit(); cur.close(); conn.close()
++
++    _write_audit("admin", "Account metric selection updated",
++                 f"account={account_id} enabled={len(enabled_ids)} added={len(to_add)} removed={len(to_remove)}")
++    return {"status": "saved", "enabled_count": len(enabled_ids)}
++
++
++@router.post("/api/account-metrics/{account_id}/apply-default")
++def apply_default_template(account_id: int):
++    conn = get_connection(); cur = conn.cursor(dictionary=True)
++    cur.execute("SELECT id FROM aws_accounts WHERE id = %s", (account_id,))
++    if not cur.fetchone():
++        cur.close(); conn.close()
++        raise HTTPException(status_code=404, detail="Account not found")
++    cur.close(); conn.close()
++
++    count = seed_account_defaults(account_id)
++
++    # Disable anything currently enabled that isn't part of the default set
++    conn = get_connection(); cur = conn.cursor()
++    cur.execute("""
++        UPDATE account_metric_selections ams
++        JOIN metric_catalog mc ON mc.id = ams.metric_id
++        SET ams.enabled = (mc.is_default = 1)
++        WHERE ams.aws_account_id = %s
++    """, (account_id,))
++    conn.commit(); cur.close(); conn.close()
++
++    _write_audit("admin", "Applied default metric template", f"account={account_id}")
++    return {"status": "applied", "default_metric_count": count}
++
++
++@router.post("/api/account-metrics/{account_id}/discover")
++def discover_namespace_metrics(account_id: int, namespace: str = Query(...), region: str = Query(None)):
++    """
++    Live CloudWatch ListMetrics call for a 'directory' namespace — used when
++    a user expands a service that doesn't have a hand-curated metric list.
++    Discovered metric names are cached into metric_catalog as category
++    'directory' rows (still metric_name-populated) so future loads are instant.
++    """
++    conn = get_connection(); cur = conn.cursor(dictionary=True)
++    cur.execute("SELECT default_region, role_arn, external_id FROM aws_accounts WHERE id = %s", (account_id,))
++    acc = cur.fetchone(); cur.close(); conn.close()
++    if not acc:
++        raise HTTPException(status_code=404, detail="Account not found")
++
++    resolved_region = region or acc.get("default_region")
++
++    try:
++        import boto3
++        if acc.get("role_arn"):
++            from app.aws.sts import assume_role
++            session = assume_role(acc["role_arn"], acc.get("external_id"))
++            cw = session.client("cloudwatch", region_name=resolved_region)
++        else:
++            cw = boto3.client("cloudwatch", region_name=resolved_region)
++
++        seen = {}
++        paginator = cw.get_paginator("list_metrics")
++        for page in paginator.paginate(Namespace=namespace):
++            for m in page.get("Metrics", []):
++                seen[m["MetricName"]] = True
++                if len(seen) >= 200:  # sane cap per discovery call
++                    break
++            if len(seen) >= 200:
++                break
++    except Exception as e:
++        raise HTTPException(status_code=400, detail=f"Discovery failed: {str(e)}")
++
++    if not seen:
++        return {"namespace": namespace, "discovered": 0, "metrics": []}
++
++    conn = get_connection(); cur = conn.cursor()
++    display_service = None
++    cur.execute("SELECT display_service, service FROM metric_catalog WHERE namespace = %s LIMIT 1", (namespace,))
++    row = cur.fetchone()
++    display_service, service_key = (row if row else (namespace, namespace.split("/")[-1].lower()))
++
++    for metric_name in seen:
++        cur.execute("""
++            INSERT INTO metric_catalog
++                (service, namespace, display_service, metric_name,
++                 statistic, unit, default_interval, category, description, is_default, enabled)
++            VALUES (%s,%s,%s,%s,'Average',NULL,300,'directory','Discovered via ListMetrics',0,1)
++            ON DUPLICATE KEY UPDATE metric_name = VALUES(metric_name)
++        """, (service_key, namespace, display_service, metric_name))
++    conn.commit(); cur.close(); conn.close()
++
++    _write_audit("admin", "Discovered namespace metrics", f"account={account_id} namespace={namespace} count={len(seen)}")
++    return {"namespace": namespace, "discovered": len(seen), "metrics": sorted(seen.keys())}
++
++
++# ── YACE config generation ───────────────────────────────────────
++
++@router.get("/api/account-metrics/{account_id}/yace-config")
++def generate_yace_config(account_id: int, download: bool = Query(True)):
++    """
++    Builds a ready-to-use YACE (yet-another-cloudwatch-exporter) discovery
++    config.yml from this account's enabled metric selection, one job per
++    AWS namespace. Deploy the output to that account/region's regional
++    monitoring server (per the distributed collection architecture —
++    CloudWatch → YACE → VictoriaMetrics, local to each account/region) and
++    reload/restart YACE there. This app does not remotely push config to
++    regional servers; it only generates it.
++    """
++    conn = get_connection(); cur = conn.cursor(dictionary=True)
++    cur.execute("""
++        SELECT account_name, account_id, role_arn, external_id, default_region
++        FROM aws_accounts WHERE id = %s
++    """, (account_id,))
++    account = cur.fetchone()
++    if not account:
++        cur.close(); conn.close()
++        raise HTTPException(status_code=404, detail="Account not found")
++
++    cur.execute("""
++        SELECT mc.namespace, mc.service, mc.metric_name, mc.statistic, mc.default_interval
++        FROM metric_catalog mc
++        JOIN account_metric_selections ams ON ams.metric_id = mc.id
++        WHERE ams.aws_account_id = %s AND ams.enabled = 1 AND mc.metric_name != ''
++        ORDER BY mc.namespace, mc.metric_name
++    """, (account_id,))
++    rows = cur.fetchall(); cur.close(); conn.close()
++
++    if not rows:
++        raise HTTPException(status_code=400, detail="No metrics enabled for this account — nothing to generate.")
++
++    # Group into one discovery job per namespace
++    jobs_by_ns = {}
++    for r in rows:
++        ns = r["namespace"]
++        job = jobs_by_ns.setdefault(ns, {
++            "type": ns,
++            "regions": [account["default_region"] or "us-east-1"],
++            "period": r["default_interval"] or 300,
++            "length": r["default_interval"] or 300,
++            "metrics": [],
++        })
++        job["period"] = min(job["period"], r["default_interval"] or 300)
++        job["length"] = job["period"]
++        job["metrics"].append({
++            "name": r["metric_name"],
++            "statistics": [r["statistic"] or "Average"],
++        })
++
++    if account["role_arn"]:
++        role_entry = {"roleArn": account["role_arn"]}
++        if account["external_id"]:
++            role_entry["externalId"] = account["external_id"]
++        for job in jobs_by_ns.values():
++            job["roles"] = [dict(role_entry)]  # copy per job — avoids YAML anchor/alias reuse
++
++    config = {
++        "apiVersion": "v1alpha1",
++        "discovery": {"jobs": list(jobs_by_ns.values())},
++    }
++
++    header = (
++        f"# YACE discovery config — generated for account "
++        f"'{account['account_name']}' ({account['account_id']}), region {account['default_region']}\n"
++        f"# Deploy this to the regional monitoring server for that account/region\n"
++        f"# (CloudWatch -> YACE -> local VictoriaMetrics) and reload YACE.\n"
++        f"# Regenerate any time the metric selection changes in Settings -> Metrics.\n\n"
++    )
++    yaml_text = header + yaml.dump(config, sort_keys=False, default_flow_style=False)
++
++    headers = {}
++    if download:
++        safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in account["account_name"])
++        headers["Content-Disposition"] = f'attachment; filename="yace-config-{safe_name}.yml"'
++
++    return Response(content=yaml_text, media_type="text/yaml", headers=headers)
+diff --git a/app/aws/metric_catalog_data.py b/app/aws/metric_catalog_data.py
+new file mode 100644
+index 0000000..1f3c5cb
+--- /dev/null
++++ b/app/aws/metric_catalog_data.py
+@@ -0,0 +1,483 @@
++# app/aws/metric_catalog_data.py
++"""
++Source-of-truth for the CloudWatch metric catalog.
++
++Two tiers:
++
++  CURATED   — services with a hand-enumerated metric list (name, unit,
++              statistic, short description, whether it's part of the
++              recommended default onboarding template). Includes the
++              'core' services this app already collects (EC2, EBS, RDS,
++              ALB, Lambda, S3, ECS) plus the most commonly monitored
++              'extended' AWS services.
++
++  DIRECTORY — every remaining AWS service that publishes CloudWatch
++              metrics (from "AWS services that publish CloudWatch
++              metrics", the official AWS namespace list). These are
++              registered by namespace only — individual metric names are
++              fetched on demand per account/region via the CloudWatch
++              ListMetrics API ("Discover" in the UI) rather than
++              hand-typed here, since AWS adds/changes these constantly
++              and only a fraction will exist in any one account.
++
++Run `python scripts/seed_metric_catalog.py` after editing this file to
++push changes into the `metric_catalog` table.
++"""
++
++# service key -> (display name, namespace, category, [ (metric_name, unit, statistic, is_default, description), ... ])
++CURATED = {
++
++    # ── Core (already collected today) ───────────────────────────
++    "ec2": ("Amazon EC2", "AWS/EC2", "core", [
++        ("CPUUtilization",     "Percent", "Average", True,  "% CPU used"),
++        ("NetworkIn",          "Bytes",   "Sum",     True,  "Inbound network traffic"),
++        ("NetworkOut",         "Bytes",   "Sum",     True,  "Outbound network traffic"),
++        ("DiskReadBytes",      "Bytes",   "Sum",     False, "Instance-store disk reads"),
++        ("DiskWriteBytes",     "Bytes",   "Sum",     False, "Instance-store disk writes"),
++        ("StatusCheckFailed",  "Count",   "Maximum", True,  "Combined instance+system health check"),
++        ("StatusCheckFailed_Instance", "Count", "Maximum", False, "Instance-level health check"),
++        ("StatusCheckFailed_System",   "Count", "Maximum", False, "Underlying host health check"),
++        ("CPUCreditUsage",     "Count",   "Sum",     False, "Burstable (T-class) CPU credits used"),
++        ("CPUCreditBalance",   "Count",   "Average", False, "Burstable (T-class) CPU credits available"),
++        ("EBSReadOps",         "Count",   "Sum",     False, "EBS read operations"),
++        ("EBSWriteOps",        "Count",   "Sum",     False, "EBS write operations"),
++        ("EBSReadBytes",       "Bytes",   "Sum",     False, "EBS bytes read"),
++        ("EBSWriteBytes",      "Bytes",   "Sum",     False, "EBS bytes written"),
++        ("MetadataNoToken",    "Count",   "Sum",     False, "IMDSv1 requests (no token) — security signal"),
++    ]),
++    "ebs": ("Amazon EBS", "AWS/EBS", "core", [
++        ("VolumeReadOps",       "Count",   "Average", True,  "Read operations/sec"),
++        ("VolumeWriteOps",      "Count",   "Average", True,  "Write operations/sec"),
++        ("VolumeReadBytes",     "Bytes",   "Average", False, "Bytes read"),
++        ("VolumeWriteBytes",    "Bytes",   "Average", False, "Bytes written"),
++        ("VolumeQueueLength",   "Count",   "Average", True,  "I/O requests waiting — bottleneck signal"),
++        ("BurstBalance",        "Percent", "Average", True,  "gp2 burst credit balance"),
++        ("VolumeIdleTime",      "Seconds", "Average", False, "Time volume was idle"),
++        ("VolumeThroughputPercentage",  "Percent", "Average", False, "io1/io2 throughput used vs provisioned"),
++        ("VolumeConsumedReadWriteOps",  "Count",   "Average", False, "Consumed IOPS toward provisioned limit"),
++        ("VolumeTotalReadTime",  "Seconds", "Average", False, "Total seconds spent on read ops"),
++        ("VolumeTotalWriteTime", "Seconds", "Average", False, "Total seconds spent on write ops"),
++    ]),
++    "rds": ("Amazon RDS", "AWS/RDS", "core", [
++        ("CPUUtilization",        "Percent", "Average", True,  "% CPU used"),
++        ("DatabaseConnections",   "Count",   "Average", True,  "Active DB connections"),
++        ("FreeStorageSpace",      "Bytes",   "Average", True,  "Remaining allocated storage"),
++        ("ReadIOPS",              "Count/Second", "Average", True,  "Read I/O operations/sec"),
++        ("WriteIOPS",             "Count/Second", "Average", True,  "Write I/O operations/sec"),
++        ("ReadLatency",           "Seconds", "Average", True,  "Avg time per read op"),
++        ("WriteLatency",          "Seconds", "Average", True,  "Avg time per write op"),
++        ("FreeableMemory",        "Bytes",   "Average", True,  "RAM available to the DB engine"),
++        ("SwapUsage",             "Bytes",   "Average", False, "Swap space used"),
++        ("DiskQueueDepth",        "Count",   "Average", False, "Outstanding I/O requests"),
++        ("ReplicaLag",            "Seconds", "Average", False, "Read-replica lag behind primary"),
++        ("BinLogDiskUsage",       "Bytes",   "Average", False, "MySQL/MariaDB binlog disk usage"),
++        ("TransactionLogsDiskUsage", "Bytes", "Average", False, "PostgreSQL WAL disk usage"),
++        ("BurstBalance",          "Percent", "Average", False, "gp2 storage burst credit balance"),
++        ("CPUCreditBalance",      "Count",   "Average", False, "Burstable-class CPU credits"),
++        ("DatabaseConnectionsBorrowLatency", "Seconds", "Average", False, "RDS Proxy connection borrow latency"),
++    ]),
++    "alb": ("Application Load Balancer", "AWS/ApplicationELB", "core", [
++        ("RequestCount",                    "Count",   "Sum",     True,  "Total requests received"),
++        ("TargetResponseTime",              "Seconds", "Average", True,  "Latency from ALB to target"),
++        ("HealthyHostCount",                "Count",   "Average", True,  "Targets passing health checks"),
++        ("UnHealthyHostCount",              "Count",   "Average", True,  "Targets failing health checks"),
++        ("HTTPCode_Target_2XX_Count",       "Count",   "Sum",     False, "Successful target responses"),
++        ("HTTPCode_Target_4XX_Count",       "Count",   "Sum",     True,  "Client-error target responses"),
++        ("HTTPCode_Target_5XX_Count",       "Count",   "Sum",     True,  "Server-error target responses"),
++        ("HTTPCode_ELB_5XX_Count",          "Count",   "Sum",     False, "Errors generated by the LB itself"),
++        ("ActiveConnectionCount",           "Count",   "Sum",     False, "Concurrent TCP connections"),
++        ("NewConnectionCount",              "Count",   "Sum",     False, "New TCP connections established"),
++        ("RejectedConnectionCount",         "Count",   "Sum",     False, "Connections rejected (LB at capacity)"),
++        ("TargetConnectionErrorCount",      "Count",   "Sum",     False, "Failed connections to targets"),
++    ]),
++    "nlb": ("Network Load Balancer", "AWS/NetworkELB", "extended", [
++        ("ActiveFlowCount",      "Count", "Average", False, "Concurrent flows"),
++        ("NewFlowCount",         "Count", "Sum",     False, "New flows established"),
++        ("HealthyHostCount",     "Count", "Average", True,  "Targets passing health checks"),
++        ("UnHealthyHostCount",   "Count", "Average", True,  "Targets failing health checks"),
++        ("ProcessedBytes",       "Bytes", "Sum",     False, "Total bytes processed"),
++        ("TCP_Client_Reset_Count", "Count", "Sum",   False, "TCP resets from clients"),
++    ]),
++    "lambda": ("AWS Lambda", "AWS/Lambda", "core", [
++        ("Invocations",         "Count",   "Sum",     True,  "Function invocations"),
++        ("Errors",              "Count",   "Sum",     True,  "Failed invocations"),
++        ("Duration",            "Milliseconds", "Average", True, "Execution time"),
++        ("Throttles",           "Count",   "Sum",     True,  "Requests throttled by concurrency limit"),
++        ("ConcurrentExecutions","Count",   "Maximum", False, "Concurrent executions in-flight"),
++        ("IteratorAge",         "Milliseconds", "Average", False, "Stream-trigger processing lag"),
++        ("DeadLetterErrors",    "Count",   "Sum",     False, "Failed to write to configured DLQ"),
++        ("ColdStart",           "Count",   "Sum",     False, "Cold-start init invocations (custom metric on some setups)"),
++    ]),
++    "s3": ("Amazon S3", "AWS/S3", "core", [
++        ("BucketSizeBytes",           "Bytes", "Average", True,  "Total bucket size (daily storage metric)"),
++        ("NumberOfObjects",           "Count", "Average", True,  "Object count (daily storage metric)"),
++        ("AllRequests",               "Count", "Sum",     False, "All requests (needs request metrics enabled)"),
++        ("4xxErrors",                 "Count", "Sum",     False, "Client-error requests"),
++        ("5xxErrors",                 "Count", "Sum",     False, "Server-error requests"),
++        ("FirstByteLatency",          "Milliseconds", "Average", False, "Time to first response byte"),
++        ("TotalRequestLatency",       "Milliseconds", "Average", False, "End-to-end request latency"),
++    ]),
++    "ecs": ("Amazon ECS", "AWS/ECS", "core", [
++        ("CPUUtilization",     "Percent", "Average", True,  "% of task/service CPU reservation used"),
++        ("MemoryUtilization",  "Percent", "Average", True,  "% of task/service memory reservation used"),
++        ("RunningTaskCount",   "Count",   "Average", False, "Tasks currently running (Container Insights)"),
++        ("PendingTaskCount",   "Count",   "Average", False, "Tasks waiting to be placed (Container Insights)"),
++    ]),
++
++    # ── Extended (curated, common services) ──────────────────────
++    "apigateway": ("Amazon API Gateway", "AWS/ApiGateway", "extended", [
++        ("Count",         "Count",        "Sum",     True,  "Total API calls"),
++        ("4XXError",       "Count",       "Sum",     True,  "Client errors"),
++        ("5XXError",       "Count",       "Sum",     True,  "Server errors"),
++        ("Latency",         "Milliseconds", "Average", True, "End-to-end request latency"),
++        ("IntegrationLatency", "Milliseconds", "Average", False, "Backend integration latency"),
++        ("CacheHitCount",   "Count",      "Sum",     False, "API cache hits"),
++        ("CacheMissCount",  "Count",      "Sum",     False, "API cache misses"),
++    ]),
++    "dynamodb": ("Amazon DynamoDB", "AWS/DynamoDB", "extended", [
++        ("ConsumedReadCapacityUnits",  "Count", "Sum",     True,  "RCUs consumed"),
++        ("ConsumedWriteCapacityUnits", "Count", "Sum",     True,  "WCUs consumed"),
++        ("ThrottledRequests",          "Count", "Sum",     True,  "Requests throttled"),
++        ("ReadThrottleEvents",         "Count", "Sum",     False, "Read throttle events"),
++        ("WriteThrottleEvents",        "Count", "Sum",     False, "Write throttle events"),
++        ("SuccessfulRequestLatency",   "Milliseconds", "Average", False, "Request latency"),
++        ("SystemErrors",               "Count", "Sum",     False, "5xx errors from DynamoDB"),
++        ("UserErrors",                 "Count", "Sum",     False, "4xx errors (bad requests)"),
++        ("ConditionalCheckFailedRequests", "Count", "Sum", False, "Conditional write failures"),
++    ]),
++    "sqs": ("Amazon SQS", "AWS/SQS", "extended", [
++        ("ApproximateNumberOfMessagesVisible", "Count", "Average", True, "Messages available to consume"),
++        ("ApproximateAgeOfOldestMessage",      "Seconds", "Maximum", True, "Oldest unprocessed message age"),
++        ("NumberOfMessagesSent",               "Count", "Sum", False, "Messages sent"),
++        ("NumberOfMessagesReceived",           "Count", "Sum", False, "Messages received"),
++        ("NumberOfMessagesDeleted",            "Count", "Sum", False, "Messages deleted"),
++        ("NumberOfEmptyReceives",              "Count", "Sum", False, "Empty poll responses"),
++        ("ApproximateNumberOfMessagesNotVisible", "Count", "Average", False, "In-flight messages"),
++    ]),
++    "sns": ("Amazon SNS", "AWS/SNS", "extended", [
++        ("NumberOfMessagesPublished", "Count", "Sum", True,  "Messages published"),
++        ("NumberOfNotificationsFailed", "Count", "Sum", True, "Failed deliveries"),
++        ("NumberOfNotificationsDelivered", "Count", "Sum", False, "Successful deliveries"),
++        ("PublishSize", "Bytes", "Average", False, "Message payload size"),
++    ]),
++    "cloudfront": ("Amazon CloudFront", "AWS/CloudFront", "extended", [
++        ("Requests",          "Count",   "Sum",     True,  "Viewer requests"),
++        ("BytesDownloaded",   "Bytes",   "Sum",     False, "Bytes served to viewers"),
++        ("BytesUploaded",     "Bytes",   "Sum",     False, "Bytes uploaded by viewers"),
++        ("4xxErrorRate",      "Percent", "Average", True,  "% of requests resulting in 4xx"),
++        ("5xxErrorRate",      "Percent", "Average", True,  "% of requests resulting in 5xx"),
++        ("TotalErrorRate",    "Percent", "Average", False, "% of requests resulting in error"),
++        ("OriginLatency",     "Milliseconds", "Average", False, "Time to first byte from origin"),
++        ("CacheHitRate",      "Percent", "Average", False, "% served from edge cache"),
++    ]),
++    "elasticache": ("Amazon ElastiCache", "AWS/ElastiCache", "extended", [
++        ("CPUUtilization",       "Percent", "Average", True,  "% CPU used"),
++        ("DatabaseMemoryUsagePercentage", "Percent", "Average", True, "% memory used (Redis)"),
++        ("CurrConnections",      "Count",   "Average", True,  "Current client connections"),
++        ("Evictions",            "Count",   "Sum",     True,  "Keys evicted due to memory pressure"),
++        ("CacheHits",            "Count",   "Sum",     False, "Cache hits"),
++        ("CacheMisses",          "Count",   "Sum",     False, "Cache misses"),
++        ("ReplicationLag",       "Seconds", "Average", False, "Redis replica lag"),
++        ("SwapUsage",            "Bytes",   "Average", False, "Swap used"),
++        ("NetworkBytesIn",       "Bytes",   "Average", False, "Inbound network traffic"),
++        ("NetworkBytesOut",      "Bytes",   "Average", False, "Outbound network traffic"),
++    ]),
++    "opensearch": ("Amazon OpenSearch Service", "AWS/ES", "extended", [
++        ("ClusterStatus.green",  "Count",   "Maximum", False, "Cluster healthy"),
++        ("ClusterStatus.yellow", "Count",   "Maximum", True,  "Cluster degraded (replica shards unassigned)"),
++        ("ClusterStatus.red",    "Count",   "Maximum", True,  "Cluster critical (primary shards unassigned)"),
++        ("CPUUtilization",       "Percent", "Average", True,  "% CPU used"),
++        ("JVMMemoryPressure",    "Percent", "Average", True,  "% JVM heap used"),
++        ("FreeStorageSpace",     "Megabytes","Minimum", True,  "Free disk space"),
++        ("ClusterIndexWritesBlocked", "Count", "Maximum", True, "Writes blocked (disk/heap pressure)"),
++        ("Nodes",                "Count",   "Average", False, "Node count"),
++        ("SearchLatency",        "Milliseconds", "Average", False, "Search request latency"),
++        ("IndexingLatency",      "Milliseconds", "Average", False, "Indexing request latency"),
++    ]),
++    "eks": ("Amazon EKS", "AWS/EKS", "extended", [
++        ("cluster_failed_node_count", "Count", "Average", True, "Nodes not Ready"),
++        ("cluster_node_count",        "Count", "Average", False, "Total nodes in cluster"),
++    ]),
++    "efs": ("Amazon EFS", "AWS/EFS", "extended", [
++        ("PercentIOLimit",       "Percent", "Average", True,  "% of provisioned I/O used"),
++        ("BurstCreditBalance",   "Bytes",   "Average", True,  "Burst throughput credits available"),
++        ("ClientConnections",    "Count",   "Sum",     False, "Active NFS client connections"),
++        ("StorageBytes",         "Bytes",   "Average", False, "Total filesystem size"),
++        ("DataReadIOBytes",      "Bytes",   "Sum",     False, "Bytes read"),
++        ("DataWriteIOBytes",     "Bytes",   "Sum",     False, "Bytes written"),
++    ]),
++    "documentdb": ("Amazon DocumentDB", "AWS/DocDB", "extended", [
++        ("CPUUtilization",     "Percent", "Average", True,  "% CPU used"),
++        ("DatabaseConnections","Count",   "Average", True,  "Active connections"),
++        ("FreeableMemory",     "Bytes",   "Average", True,  "RAM available"),
++        ("VolumeBytesUsed",    "Bytes",   "Average", False, "Cluster storage used"),
++        ("BufferCacheHitRatio","Percent", "Average", False, "Buffer cache hit rate"),
++    ]),
++    "neptune": ("Amazon Neptune", "AWS/Neptune", "extended", [
++        ("CPUUtilization",     "Percent", "Average", True,  "% CPU used"),
++        ("GremlinRequestsPerSec", "Count/Second", "Average", False, "Gremlin request rate"),
++        ("SparqlRequestsPerSec",  "Count/Second", "Average", False, "SPARQL request rate"),
++        ("VolumeBytesUsed",    "Bytes",   "Average", False, "Cluster storage used"),
++    ]),
++    "msk": ("Amazon MSK", "AWS/Kafka", "extended", [
++        ("CpuUser",              "Percent", "Average", True,  "% CPU used (user)"),
++        ("KafkaDataLogsDiskUsed","Percent", "Average", True,  "% broker disk used"),
++        ("UnderReplicatedPartitions","Count","Sum",     True,  "Partitions under-replicated"),
++        ("OfflinePartitionsCount","Count",  "Sum",      True,  "Partitions offline"),
++        ("BytesInPerSec",        "Bytes/Second","Average", False, "Broker inbound throughput"),
++        ("BytesOutPerSec",       "Bytes/Second","Average", False, "Broker outbound throughput"),
++    ]),
++    "kinesis": ("Amazon Kinesis Data Streams", "AWS/Kinesis", "extended", [
++        ("IncomingBytes",        "Bytes",   "Sum",  True,  "Bytes ingested"),
++        ("IncomingRecords",      "Count",   "Sum",  True,  "Records ingested"),
++        ("ReadProvisionedThroughputExceeded",  "Count", "Sum", True, "Read throttling"),
++        ("WriteProvisionedThroughputExceeded", "Count", "Sum", True, "Write throttling"),
++        ("GetRecords.IteratorAgeMilliseconds", "Milliseconds", "Maximum", False, "Consumer processing lag"),
++    ]),
++    "firehose": ("Amazon Data Firehose", "AWS/Firehose", "extended", [
++        ("DeliveryToS3.Success",   "Percent", "Average", True,  "% of records delivered successfully"),
++        ("IncomingBytes",          "Bytes",   "Sum",     False, "Bytes ingested"),
++        ("IncomingRecords",        "Count",   "Sum",     False, "Records ingested"),
++        ("DeliveryToS3.DataFreshness", "Seconds", "Maximum", False, "Age of oldest undelivered record"),
++    ]),
++    "autoscaling": ("EC2 Auto Scaling", "AWS/AutoScaling", "extended", [
++        ("GroupInServiceInstances", "Count", "Average", True, "Healthy running instances"),
++        ("GroupDesiredCapacity",    "Count", "Average", False, "Desired capacity"),
++        ("GroupMinSize",            "Count", "Average", False, "Configured minimum"),
++        ("GroupMaxSize",            "Count", "Average", False, "Configured maximum"),
++        ("GroupPendingInstances",   "Count", "Average", False, "Instances launching"),
++        ("GroupTerminatingInstances","Count","Average", False, "Instances terminating"),
++    ]),
++    "natgateway": ("NAT Gateway", "AWS/NATGateway", "extended", [
++        ("BytesOutToDestination", "Bytes", "Sum", True, "Outbound bytes"),
++        ("BytesInFromSource",     "Bytes", "Sum", True, "Inbound bytes"),
++        ("ErrorPortAllocation",   "Count", "Sum", True, "Port allocation errors (NAT exhaustion)"),
++        ("ActiveConnectionCount", "Count", "Average", False, "Concurrent active connections"),
++        ("PacketsDropCount",      "Count", "Sum", False, "Dropped packets"),
++    ]),
++    "transitgateway": ("Transit Gateway", "AWS/TransitGateway", "extended", [
++        ("BytesIn",   "Bytes", "Sum", True, "Inbound bytes"),
++        ("BytesOut",  "Bytes", "Sum", True, "Outbound bytes"),
++        ("PacketDropCountBlackhole", "Count", "Sum", True, "Packets dropped (blackhole route)"),
++        ("PacketDropCountNoRoute",   "Count", "Sum", True, "Packets dropped (no route)"),
++    ]),
++    "route53": ("Amazon Route 53", "AWS/Route53", "extended", [
++        ("HealthCheckStatus",       "Count",   "Minimum", True, "Health check pass(1)/fail(0)"),
++        ("HealthCheckPercentageHealthy", "Percent", "Average", False, "% of checking regions reporting healthy"),
++        ("ConnectionTime",          "Milliseconds", "Average", False, "TCP connection time"),
++    ]),
++    "wafv2": ("AWS WAF", "AWS/WAFV2", "extended", [
++        ("AllowedRequests", "Count", "Sum", False, "Requests allowed"),
++        ("BlockedRequests", "Count", "Sum", True,  "Requests blocked"),
++        ("CountedRequests", "Count", "Sum", False, "Requests matched in count mode"),
++        ("PassedRequests",  "Count", "Sum", False, "Requests passed through"),
++    ]),
++    "redshift": ("Amazon Redshift", "AWS/Redshift", "extended", [
++        ("CPUUtilization",       "Percent", "Average", True, "% CPU used"),
++        ("PercentageDiskSpaceUsed", "Percent", "Average", True, "% disk used"),
++        ("DatabaseConnections",  "Count",   "Average", True, "Active connections"),
++        ("QueryDuration",        "Microseconds", "Average", False, "Query execution time"),
++        ("ReadIOPS",             "Count/Second", "Average", False, "Read IOPS"),
++        ("WriteIOPS",            "Count/Second", "Average", False, "Write IOPS"),
++        ("WLMQueueLength",       "Count",   "Average", False, "Queries waiting in WLM queue"),
++    ]),
++    "memorydb": ("Amazon MemoryDB", "AWS/MemoryDB", "extended", [
++        ("CPUUtilization",     "Percent", "Average", True, "% CPU used"),
++        ("DatabaseMemoryUsagePercentage", "Percent", "Average", True, "% memory used"),
++        ("CurrConnections",    "Count",   "Average", False, "Current connections"),
++        ("Evictions",          "Count",   "Sum",     True,  "Keys evicted"),
++    ]),
++    "dax": ("DynamoDB Accelerator (DAX)", "AWS/DAX", "extended", [
++        ("CPUUtilization",  "Percent", "Average", True, "% CPU used"),
++        ("FaultRequestCount", "Count", "Sum", True, "Failed requests"),
++        ("ItemCacheHits",   "Count",   "Sum", False, "Item cache hits"),
++        ("ItemCacheMisses", "Count",   "Sum", False, "Item cache misses"),
++    ]),
++    "states": ("AWS Step Functions", "AWS/States", "extended", [
++        ("ExecutionsFailed",    "Count", "Sum", True,  "Failed executions"),
++        ("ExecutionsSucceeded", "Count", "Sum", False, "Successful executions"),
++        ("ExecutionsTimedOut",  "Count", "Sum", True,  "Timed-out executions"),
++        ("ExecutionThrottled",  "Count", "Sum", False, "Throttled executions"),
++        ("ExecutionTime",       "Milliseconds", "Average", False, "State machine execution time"),
++    ]),
++    "events": ("Amazon EventBridge", "AWS/Events", "extended", [
++        ("Invocations",           "Count", "Sum", True,  "Rule target invocations"),
++        ("FailedInvocations",     "Count", "Sum", True,  "Failed target invocations"),
++        ("ThrottledRules",        "Count", "Sum", False, "Rules throttled"),
++        ("MatchedEvents",         "Count", "Sum", False, "Events matched to rules"),
++    ]),
++    "kms": ("AWS KMS", "AWS/KMS", "extended", [
++        ("SecondsUntilKeyMaterialExpiration", "Seconds", "Minimum", False, "Time until imported key material expires"),
++    ]),
++    "certificatemanager": ("AWS Certificate Manager", "AWS/CertificateManager", "extended", [
++        ("DaysToExpiry", "Days", "Minimum", True, "Days until certificate expiry"),
++    ]),
++    "backup": ("AWS Backup", "AWS/Backup", "extended", [
++        ("NumberOfBackupJobsFailed",    "Count", "Sum", True,  "Failed backup jobs"),
++        ("NumberOfBackupJobsCompleted", "Count", "Sum", False, "Completed backup jobs"),
++        ("NumberOfRestoreJobsFailed",   "Count", "Sum", True,  "Failed restore jobs"),
++    ]),
++    "cognito": ("Amazon Cognito", "AWS/Cognito", "extended", [
++        ("SignInSuccesses", "Count", "Sum", False, "Successful sign-ins"),
++        ("SignUpSuccesses", "Count", "Sum", False, "Successful sign-ups"),
++        ("ThrottledEvents", "Count", "Sum", True,  "Throttled requests"),
++    ]),
++    "logs": ("Amazon CloudWatch Logs", "AWS/Logs", "extended", [
++        ("IncomingBytes",  "Bytes", "Sum", False, "Log bytes ingested"),
++        ("IncomingLogEvents", "Count", "Sum", False, "Log events ingested"),
++        ("DeliveryErrors", "Count", "Sum", True, "Subscription/export delivery errors"),
++    ]),
++    "vpn": ("Site-to-Site VPN", "AWS/VPN", "extended", [
++        ("TunnelState",   "Count", "Maximum", True, "Tunnel up(1)/down(0)"),
++        ("TunnelDataIn",  "Bytes", "Sum", False, "Bytes received"),
++        ("TunnelDataOut", "Bytes", "Sum", False, "Bytes sent"),
++    ]),
++    "globalaccelerator": ("AWS Global Accelerator", "AWS/GlobalAccelerator", "extended", [
++        ("NewFlowCount",     "Count", "Sum", False, "New flows"),
++        ("ProcessedBytesIn", "Bytes", "Sum", False, "Inbound bytes processed"),
++        ("ProcessedBytesOut","Bytes", "Sum", False, "Outbound bytes processed"),
++    ]),
++    "dms": ("AWS Database Migration Service", "AWS/DMS", "extended", [
++        ("CDCLatencySource", "Seconds", "Average", True, "Replication latency from source"),
++        ("CDCLatencyTarget", "Seconds", "Average", True, "Replication latency to target"),
++        ("FreeableMemory",   "Bytes",   "Average", False, "Replication instance RAM available"),
++        ("CPUUtilization",   "Percent", "Average", False, "Replication instance CPU used"),
++    ]),
++    "directconnect": ("AWS Direct Connect", "AWS/DX", "extended", [
++        ("ConnectionState",         "Count", "Maximum", True, "Connection up(1)/down(0)"),
++        ("ConnectionBpsEgress",     "Bits/Second", "Average", False, "Egress throughput"),
++        ("ConnectionBpsIngress",    "Bits/Second", "Average", False, "Ingress throughput"),
++        ("ConnectionErrorCount",    "Count", "Sum", True, "Connection errors"),
++    ]),
++}
++
++# (display_service, namespace) — full AWS list, "AWS services that publish
++# CloudWatch metrics": https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/aws-services-cloudwatch-metrics.html
++# Anything already present in CURATED above is skipped when seeding.
++DIRECTORY = [
++    ("AWS Amplify", "AWS/AmplifyHosting"),
++    ("AWS App Runner", "AWS/AppRunner"),
++    ("WorkSpaces Applications", "AWS/AppStream"),
++    ("AWS AppSync", "AWS/AppSync"),
++    ("Amazon AppFlow", "AWS/AppFlow"),
++    ("AWS Application Migration Service", "AWS/MGN"),
++    ("Amazon Athena", "AWS/Athena"),
++    ("Amazon Bedrock Guardrails", "AWS/Bedrock/Guardrails"),
++    ("AWS Billing and Cost Management", "AWS/Billing"),
++    ("Amazon Braket", "AWS/Braket/By Device"),
++    ("AWS Private CA", "AWS/ACMPrivateCA"),
++    ("Amazon Q Developer in chat applications", "AWS/Chatbot"),
++    ("Amazon Chime", "AWS/ChimeVoiceConnector"),
++    ("Amazon Chime SDK", "AWS/ChimeSDK"),
++    ("AWS Client VPN", "AWS/ClientVPN"),
++    ("AWS CloudHSM", "AWS/CloudHSM"),
++    ("Amazon CloudSearch", "AWS/CloudSearch"),
++    ("AWS CloudTrail", "AWS/CloudTrail"),
++    ("CloudWatch agent", "CWAgent"),
++    ("CloudWatch Application Signals", "ApplicationSignals"),
++    ("CloudWatch metric streams", "AWS/CloudWatch/MetricStreams"),
++    ("CloudWatch RUM", "AWS/RUM"),
++    ("CloudWatch Synthetics", "CloudWatchSynthetics"),
++    ("AWS CodeBuild", "AWS/CodeBuild"),
++    ("Amazon CodeGuru Reviewer", "AWS/CodeGuruReviewer"),
++    ("AWS CodePipeline", "AWS/CodePipeline"),
++    ("Amazon Comprehend", "AWS/Comprehend"),
++    ("AWS Config", "AWS/Config"),
++    ("Connect Customer", "AWS/Connect"),
++    ("Amazon Data Lifecycle Manager", "AWS/DataLifecycleManager"),
++    ("AWS DataSync", "AWS/DataSync"),
++    ("Amazon DevOps Guru", "AWS/DevOps-Guru"),
++    ("AWS Directory Service", "AWS/DirectoryService"),
++    ("Amazon EC2 Elastic Graphics", "AWS/ElasticGPUs"),
++    ("Amazon EC2 Spot Fleet", "AWS/EC2Spot"),
++    ("AWS Elastic Beanstalk", "AWS/ElasticBeanstalk"),
++    ("Amazon Elastic Container Registry", "AWS/ECR"),
++    ("Amazon ECS through CloudWatch Container Insights", "ECS/ContainerInsights"),
++    ("Amazon ECS Cluster auto scaling", "AWS/ECS/ManagedScaling"),
++    ("AWS Elastic Disaster Recovery", "AWS/DRS"),
++    ("Amazon Elastic Inference", "AWS/ElasticInference"),
++    ("Amazon EKS through CloudWatch Container Insights", "ContainerInsights"),
++    ("Elastic Load Balancing (Gateway)", "AWS/GatewayELB"),
++    ("Elastic Load Balancing (Classic)", "AWS/ELB"),
++    ("Amazon EMR", "AWS/ElasticMapReduce"),
++    ("Amazon EMR Serverless", "AWS/EMRServerless"),
++    ("AWS Elemental MediaConnect", "AWS/MediaConnect"),
++    ("AWS Elemental MediaConvert", "AWS/MediaConvert"),
++    ("AWS Elemental MediaLive", "AWS/MediaLive"),
++    ("AWS Elemental MediaPackage", "AWS/MediaPackage"),
++    ("AWS Elemental MediaStore", "AWS/MediaStore"),
++    ("AWS Elemental MediaTailor", "AWS/MediaTailor"),
++    ("AWS End User Messaging SMS", "AWS/SMSVoice"),
++    ("AWS End User Messaging Social", "AWS/SocialMessaging"),
++    ("Amazon FinSpace", "AWS/FinSpace"),
++    ("Amazon Forecast", "AWS/Forecast"),
++    ("Amazon Fraud Detector", "AWS/FraudDetector"),
++    ("Amazon FSx", "AWS/FSx"),
++    ("Amazon GameLift Servers", "AWS/GameLift"),
++    ("AWS Glue", "Glue"),
++    ("AWS Ground Station", "AWS/GroundStation"),
++    ("AWS HealthLake", "AWS/HealthLake"),
++    ("Amazon Inspector", "AWS/Inspector"),
++    ("Amazon Interactive Video Service", "AWS/IVS"),
++    ("Amazon Interactive Video Service Chat", "AWS/IVSChat"),
++    ("AWS IoT", "AWS/IoT"),
++    ("AWS IoT FleetWise", "AWS/IoTFleetWise"),
++    ("AWS IoT SiteWise", "AWS/IoTSiteWise"),
++    ("AWS IoT TwinMaker", "AWS/IoTTwinMaker"),
++    ("Amazon Keyspaces (for Apache Cassandra)", "AWS/Cassandra"),
++    ("Amazon Kendra", "AWS/Kendra"),
++    ("Amazon Managed Service for Apache Flink", "AWS/KinesisAnalytics"),
++    ("Amazon Kinesis Video Streams", "AWS/KinesisVideo"),
++    ("Amazon Lex", "AWS/Lex"),
++    ("AWS License Manager", "AWSLicenseManager/licenseUsage"),
++    ("Amazon Location Service", "AWS/Location"),
++    ("Amazon Lookout for Equipment", "AWS/lookoutequipment"),
++    ("Amazon Lookout for Vision", "AWS/LookoutVision"),
++    ("AWS Mainframe Modernization", "AWS/M2"),
++    ("Amazon Machine Learning", "AWS/ML"),
++    ("Amazon Managed Blockchain", "AWS/managedblockchain"),
++    ("Amazon Managed Service for Prometheus", "AWS/Prometheus"),
++    ("Amazon Managed Streaming for Apache Kafka Connect", "AWS/KafkaConnect"),
++    ("Amazon Managed Workflows for Apache Airflow", "AWS/MWAA"),
++    ("Amazon MQ", "AWS/AmazonMQ"),
++    ("AWS Network Firewall", "AWS/NetworkFirewall"),
++    ("AWS Network Manager", "AWS/NetworkManager"),
++    ("AWS HealthOmics", "AWS/Omics"),
++    ("AWS Outposts", "AWS/Outposts"),
++    ("AWS Panorama", "AWS/PanoramaDeviceMetrics"),
++    ("Amazon Personalize", "AWS/Personalize"),
++    ("Amazon Pinpoint", "AWS/Pinpoint"),
++    ("Amazon Polly", "AWS/Polly"),
++    ("AWS PrivateLink (Endpoints)", "AWS/PrivateLinkEndpoints"),
++    ("AWS PrivateLink (Services)", "AWS/PrivateLinkServices"),
++    ("AWS Private 5G", "AWS/Private5G"),
++    ("Amazon Q Apps", "AWS/QApps"),
++    ("Amazon Q Business", "AWS/QBusiness"),
++    ("Amazon Q Developer", "AWS/Q"),
++    ("Amazon Quick (QuickSight)", "AWS/QuickSight"),
++    ("Amazon Rekognition", "AWS/Rekognition"),
++    ("AWS re:Post Private", "AWS/rePostPrivate"),
++    ("Route 53 Application Recovery Controller", "AWS/Route53RecoveryReadiness"),
++    ("Amazon SageMaker AI", "AWS/SageMaker"),
++    ("Amazon SageMaker AI Model Building Pipelines", "AWS/SageMaker/ModelBuildingPipeline"),
++    ("AWS Secrets Manager", "AWS/SecretsManager"),
++    ("Amazon Security Lake", "AWS/SecurityLake"),
++    ("Service Catalog", "AWS/ServiceCatalog"),
++    ("AWS Shield Advanced", "AWS/DDoSProtection"),
++    ("Amazon Simple Email Service", "AWS/SES"),
++    ("S3 Storage Lens", "AWS/S3/Storage-Lens"),
++    ("Amazon Simple Workflow Service", "AWS/SWF"),
++    ("AWS Storage Gateway", "AWS/StorageGateway"),
++    ("AWS Systems Manager Run Command", "AWS/SSM-RunCommand"),
++    ("Amazon Textract", "AWS/Textract"),
++    ("Amazon Timestream", "AWS/Timestream"),
++    ("AWS Transfer for SFTP", "AWS/Transfer"),
++    ("Amazon Transcribe", "AWS/Transcribe"),
++    ("Amazon Translate", "AWS/Translate"),
++    ("AWS Trusted Advisor", "AWS/TrustedAdvisor"),
++    ("Amazon VPC IP Address Manager", "AWS/IPAM"),
++    ("AWS WAF Classic", "WAF"),
++    ("Amazon WorkMail", "AWS/WorkMail"),
++    ("Amazon WorkSpaces", "AWS/WorkSpaces"),
++    ("Amazon WorkSpaces Web", "AWS/WorkSpacesWeb"),
++]
+diff --git a/app/main.py b/app/main.py
+index 4bb14cb..1638760 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -16,6 +16,7 @@ from app.api.admin.users    import router as admin_users_router
+ from app.api.settings       import router as settings_router
+ from app.api.live_data      import router as live_data_router
+ from app.api.audit_logs     import router as audit_logs_router
++from app.api.metric_catalog import router as metric_catalog_router
+ 
+ from app.ws.manager import ws_manager
+ from app.ws.pusher  import redis_listener
+@@ -88,4 +89,5 @@ app.include_router(auth_router)
+ app.include_router(admin_users_router)
+ app.include_router(live_data_router)
+ app.include_router(audit_logs_router)
+-app.include_router(settings_router)
+\ No newline at end of file
++app.include_router(settings_router)
++app.include_router(metric_catalog_router)
+\ No newline at end of file
+diff --git a/db/migrations/003_metric_catalog_full.sql b/db/migrations/003_metric_catalog_full.sql
+new file mode 100644
+index 0000000..4269566
+--- /dev/null
++++ b/db/migrations/003_metric_catalog_full.sql
+@@ -0,0 +1,46 @@
++-- db/migrations/003_metric_catalog_full.sql
++-- Adds full CloudWatch metric catalog support + per-account metric selection.
++-- Safe to run multiple times.
++--
++-- Run: mysql -umonitor -proot123 monitoring_hub < db/migrations/003_metric_catalog_full.sql
++-- Then seed the catalog:  python scripts/seed_metric_catalog.py
++
++-- ── 1. Extend metric_catalog ─────────────────────────────────────
++-- category:
++--   'core'      = already collected by this app (EC2/EBS/RDS/ALB/Lambda/S3/ECS)
++--   'extended'  = curated, full metric list, not yet wired into collection
++--   'directory' = namespace known (from AWS docs), individual metrics not
++--                 hand-enumerated — populated on demand via CloudWatch
++--                 ListMetrics ("Discover" button) per account/region.
++ALTER TABLE metric_catalog
++    ADD COLUMN IF NOT EXISTS namespace       VARCHAR(100) AFTER service,
++    ADD COLUMN IF NOT EXISTS display_service VARCHAR(150) AFTER namespace,
++    ADD COLUMN IF NOT EXISTS category        ENUM('core','extended','directory') NOT NULL DEFAULT 'extended' AFTER unit,
++    ADD COLUMN IF NOT EXISTS description     VARCHAR(255) AFTER category,
++    ADD COLUMN IF NOT EXISTS is_default      TINYINT(1) NOT NULL DEFAULT 0 AFTER description;
++
++ALTER TABLE metric_catalog
++    ADD UNIQUE KEY IF NOT EXISTS uniq_catalog_entry (namespace, metric_name);
++
++ALTER TABLE metric_catalog
++    ADD INDEX IF NOT EXISTS idx_catalog_service (service),
++    ADD INDEX IF NOT EXISTS idx_catalog_category (category);
++
++-- ── 2. Per-account metric selection ──────────────────────────────
++-- Which catalog entries a given AWS account has opted in to monitor.
++-- Rows are created from the default template at onboarding time and can
++-- be freely added/removed afterwards from Settings.
++CREATE TABLE IF NOT EXISTS account_metric_selections (
++  id             BIGINT AUTO_INCREMENT PRIMARY KEY,
++  aws_account_id BIGINT NOT NULL,
++  metric_id      BIGINT NOT NULL,
++  enabled        TINYINT(1) NOT NULL DEFAULT 1,
++  source         ENUM('template','manual','discovered') NOT NULL DEFAULT 'template',
++  created_at     TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
++  updated_at     TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
++  UNIQUE KEY uniq_account_metric (aws_account_id, metric_id),
++  KEY idx_ams_account (aws_account_id),
++  KEY idx_ams_metric (metric_id),
++  CONSTRAINT fk_ams_account FOREIGN KEY (aws_account_id) REFERENCES aws_accounts(id) ON DELETE CASCADE,
++  CONSTRAINT fk_ams_metric  FOREIGN KEY (metric_id)      REFERENCES metric_catalog(id) ON DELETE CASCADE
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+diff --git a/frontend/src/api/api.js b/frontend/src/api/api.js
+index 5c2fd4c..906471c 100644
+--- a/frontend/src/api/api.js
++++ b/frontend/src/api/api.js
+@@ -40,4 +40,20 @@ export const getAuditLogs     = (limit=100) => apiFetch(`/api/audit-logs?limit=$
+ 
+ // ── Auth ──────────────────────────────────────────────────────
+ export const login = (username, password) =>
+-  apiFetch("/api/auth/login", { method:"POST", body: JSON.stringify({ username, password }) });
+\ No newline at end of file
++  apiFetch("/api/auth/login", { method:"POST", body: JSON.stringify({ username, password }) });
++
++// ── Metric catalog ───────────────────────────────────────────────
++export const getMetricCatalog        = (params = {}) => {
++  const qs = new URLSearchParams(params).toString();
++  return apiFetch(`/api/metric-catalog${qs ? `?${qs}` : ""}`);
++};
++export const getMetricCatalogServices = () => apiFetch("/api/metric-catalog/services");
++export const getDefaultTemplate       = () => apiFetch("/api/metric-catalog/default-template");
++export const getAccountMetrics        = (accountId) => apiFetch(`/api/account-metrics/${accountId}`);
++export const saveAccountMetrics       = (accountId, enabledIds) =>
++  apiFetch(`/api/account-metrics/${accountId}`, { method: "PUT", body: JSON.stringify({ enabled_metric_ids: enabledIds }) });
++export const applyDefaultTemplate     = (accountId) =>
++  apiFetch(`/api/account-metrics/${accountId}/apply-default`, { method: "POST" });
++export const discoverNamespaceMetrics = (accountId, namespace, region) =>
++  apiFetch(`/api/account-metrics/${accountId}/discover?namespace=${encodeURIComponent(namespace)}${region ? `&region=${region}` : ""}`, { method: "POST" });
++export const downloadYaceConfig = (accountId) => `/api/account-metrics/${accountId}/yace-config`;
+\ No newline at end of file
+diff --git a/frontend/src/components/MetricSelector.css b/frontend/src/components/MetricSelector.css
+new file mode 100644
+index 0000000..af5cca2
+--- /dev/null
++++ b/frontend/src/components/MetricSelector.css
+@@ -0,0 +1,183 @@
++/* src/components/MetricSelector.css */
++.ms-root {
++  display: flex;
++  flex-direction: column;
++  gap: 10px;
++  font-family: var(--font-sans);
++}
++
++.ms-toolbar {
++  display: flex;
++  flex-wrap: wrap;
++  align-items: center;
++  gap: 10px;
++}
++
++.ms-search {
++  flex: 1 1 220px;
++  min-width: 180px;
++  background: var(--bg-input);
++  border: 1px solid var(--border);
++  border-radius: var(--radius);
++  color: var(--text-primary);
++  padding: 8px 12px;
++  font-size: 13px;
++}
++.ms-search:focus { outline: none; border-color: var(--accent); }
++
++.ms-tabs { display: flex; gap: 4px; }
++.ms-tab {
++  background: transparent;
++  border: 1px solid var(--border);
++  color: var(--text-secondary);
++  border-radius: var(--radius);
++  padding: 6px 10px;
++  font-size: 12px;
++  cursor: pointer;
++}
++.ms-tab-active {
++  background: var(--accent-dim);
++  border-color: var(--accent);
++  color: var(--accent);
++}
++
++.ms-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
++.ms-count { font-size: 12px; color: var(--text-muted); font-family: var(--font-mono); }
++.ms-btn-ghost {
++  background: transparent;
++  border: 1px solid var(--border-md);
++  color: var(--text-secondary);
++  border-radius: var(--radius);
++  padding: 6px 10px;
++  font-size: 12px;
++  cursor: pointer;
++}
++.ms-btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
++.ms-btn-ghost:disabled { opacity: 0.5; cursor: default; }
++
++.ms-list {
++  display: flex;
++  flex-direction: column;
++  gap: 6px;
++  max-height: 480px;
++  overflow-y: auto;
++  border: 1px solid var(--border);
++  border-radius: var(--radius-lg);
++  padding: 8px;
++  background: var(--bg-surface);
++}
++.ms-compact .ms-list { max-height: 340px; }
++
++.ms-empty { padding: 24px; text-align: center; color: var(--text-muted); font-size: 13px; }
++
++.ms-group {
++  border: 1px solid var(--border);
++  border-radius: var(--radius);
++  background: var(--bg-card);
++  overflow: hidden;
++}
++
++.ms-group-header {
++  width: 100%;
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  background: transparent;
++  border: none;
++  color: var(--text-primary);
++  padding: 9px 12px;
++  cursor: pointer;
++  text-align: left;
++  font-size: 13px;
++}
++.ms-group-header:hover { background: var(--bg-card-hover); }
++
++.ms-chevron { color: var(--text-muted); transition: transform 0.15s; font-size: 10px; }
++.ms-chevron-open { transform: rotate(90deg); }
++
++.ms-group-name { font-weight: 600; }
++
++.ms-badge {
++  font-size: 10px;
++  text-transform: uppercase;
++  letter-spacing: 0.04em;
++  padding: 2px 6px;
++  border-radius: 4px;
++  border: 1px solid var(--border-md);
++  color: var(--text-muted);
++}
++.ms-badge-core      { color: var(--accent-green); border-color: var(--accent-green); }
++.ms-badge-extended  { color: var(--accent); border-color: var(--accent); }
++.ms-badge-directory { color: var(--accent-purple); border-color: var(--accent-purple); }
++
++.ms-namespace {
++  font-family: var(--font-mono);
++  font-size: 11px;
++  color: var(--text-muted);
++}
++
++.ms-spacer { flex: 1; }
++
++.ms-group-count {
++  font-family: var(--font-mono);
++  font-size: 11px;
++  color: var(--text-secondary);
++}
++
++.ms-select-all {
++  font-size: 11px;
++  color: var(--accent);
++  cursor: pointer;
++  padding: 2px 6px;
++}
++.ms-select-all:hover { text-decoration: underline; }
++
++.ms-group-body {
++  border-top: 1px solid var(--border);
++  padding: 4px 8px 8px 8px;
++  display: flex;
++  flex-direction: column;
++  gap: 2px;
++}
++
++.ms-discover-row {
++  display: flex;
++  align-items: center;
++  gap: 10px;
++  padding: 8px 4px;
++  font-size: 12px;
++  color: var(--text-muted);
++  flex-wrap: wrap;
++}
++.ms-discover-hint-sub { font-size: 11px; color: var(--text-muted); font-style: italic; }
++
++.ms-metric-row {
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  padding: 6px 8px;
++  border-radius: 6px;
++  cursor: pointer;
++  font-size: 12.5px;
++}
++.ms-metric-row:hover { background: var(--bg-card-hover); }
++
++.ms-metric-row input[type="checkbox"] {
++  accent-color: var(--accent);
++  width: 14px;
++  height: 14px;
++  flex-shrink: 0;
++}
++
++.ms-metric-name { color: var(--text-primary); font-family: var(--font-mono); min-width: 190px; }
++.ms-metric-stat { color: var(--text-muted); font-size: 11px; min-width: 110px; }
++.ms-metric-desc { color: var(--text-secondary); font-size: 11.5px; flex: 1; }
++
++.ms-default-tag {
++  font-size: 10px;
++  color: var(--accent-green);
++  border: 1px solid var(--accent-green);
++  border-radius: 4px;
++  padding: 1px 5px;
++  white-space: nowrap;
++}
+diff --git a/frontend/src/components/MetricSelector.jsx b/frontend/src/components/MetricSelector.jsx
+new file mode 100644
+index 0000000..1043631
+--- /dev/null
++++ b/frontend/src/components/MetricSelector.jsx
+@@ -0,0 +1,191 @@
++// src/components/MetricSelector.jsx
++import { useState, useMemo } from "react";
++import "./MetricSelector.css";
++
++const CATEGORY_LABEL = { core: "Core", extended: "Extended", directory: "Directory (100+ AWS services)" };
++const CATEGORY_TABS = ["all", "core", "extended", "directory"];
++
++/**
++ * Reusable AWS CloudWatch metric picker.
++ *
++ * props:
++ *   catalog       — [{ service, display_service, namespace, category, metrics:[{id, metric_name, statistic, unit, description, is_default, enabled?}], directory_id }]
++ *   selectedIds   — Set<number> of currently-enabled metric ids (controlled)
++ *   onChange(nextSet) — called with a new Set whenever selection changes
++ *   onDiscover(namespace) — optional async fn; runs the live AWS discovery
++ *                            call and persists results server-side. After it
++ *                            resolves, the caller must refresh `catalog`
++ *                            (real metric ids only exist once the backend
++ *                            has written them) — this component does not
++ *                            fabricate rows client-side.
++ *   compact       — smaller service list, used inline in onboarding
++ */
++export default function MetricSelector({ catalog, selectedIds, onChange, onDiscover, compact = false }) {
++  const [search, setSearch]       = useState("");
++  const [tab, setTab]             = useState("all");
++  const [expanded, setExpanded]   = useState(() => new Set());
++  const [discovering, setDiscovering] = useState(null);
++
++  const filtered = useMemo(() => {
++    const q = search.trim().toLowerCase();
++    return (catalog || [])
++      .filter(g => tab === "all" || g.category === tab)
++      .map(g => {
++        if (!q) return g;
++        const svcMatch = (g.display_service || "").toLowerCase().includes(q);
++        const metrics = svcMatch ? g.metrics : g.metrics.filter(m =>
++          m.metric_name.toLowerCase().includes(q) ||
++          (m.description || "").toLowerCase().includes(q)
++        );
++        return { ...g, metrics };
++      })
++      .filter(g => g.metrics.length > 0 || (q && (g.display_service || "").toLowerCase().includes(q)));
++  }, [catalog, search, tab]);
++
++  const totalSelected = selectedIds.size;
++
++  function toggleMetric(id) {
++    const next = new Set(selectedIds);
++    next.has(id) ? next.delete(id) : next.add(id);
++    onChange(next);
++  }
++
++  function toggleService(group, allOn) {
++    const next = new Set(selectedIds);
++    group.metrics.forEach(m => allOn ? next.delete(m.id) : next.add(m.id));
++    onChange(next);
++  }
++
++  function toggleExpand(service) {
++    setExpanded(prev => {
++      const next = new Set(prev);
++      next.has(service) ? next.delete(service) : next.add(service);
++      return next;
++    });
++  }
++
++  function applyDefaults() {
++    const next = new Set(selectedIds);
++    (catalog || []).forEach(g => g.metrics.forEach(m => { if (m.is_default) next.add(m.id); }));
++    onChange(next);
++  }
++
++  function clearAll() {
++    onChange(new Set());
++  }
++
++  async function handleDiscover(group) {
++    if (!onDiscover) return;
++    setDiscovering(group.namespace);
++    try {
++      await onDiscover(group.namespace);   // parent refetches catalog with real ids
++      setExpanded(prev => new Set(prev).add(group.service));
++    } catch (e) {
++      console.error("Discover failed", e);
++    } finally {
++      setDiscovering(null);
++    }
++  }
++
++  return (
++    <div className={`ms-root ${compact ? "ms-compact" : ""}`}>
++      <div className="ms-toolbar">
++        <input
++          className="ms-search"
++          placeholder="Search metrics or services…"
++          value={search}
++          onChange={e => setSearch(e.target.value)}
++        />
++        <div className="ms-tabs">
++          {CATEGORY_TABS.map(t => (
++            <button
++              key={t}
++              type="button"
++              className={`ms-tab ${tab === t ? "ms-tab-active" : ""}`}
++              onClick={() => setTab(t)}
++            >
++              {t === "all" ? "All" : CATEGORY_LABEL[t]}
++            </button>
++          ))}
++        </div>
++        <div className="ms-actions">
++          <span className="ms-count">{totalSelected} selected</span>
++          <button type="button" className="ms-btn-ghost" onClick={applyDefaults}>Apply recommended</button>
++          <button type="button" className="ms-btn-ghost" onClick={clearAll}>Clear all</button>
++        </div>
++      </div>
++
++      <div className="ms-list">
++        {filtered.length === 0 && (
++          <div className="ms-empty">No metrics match "{search}".</div>
++        )}
++        {filtered.map(group => {
++          const isOpen   = expanded.has(group.service) || (search.trim() !== "");
++          const selCount = group.metrics.filter(m => selectedIds.has(m.id)).length;
++          const allOn    = group.metrics.length > 0 && selCount === group.metrics.length;
++          const isDirectoryEmpty = group.category === "directory" && group.metrics.length === 0;
++
++          return (
++            <div key={group.service} className="ms-group">
++              <button type="button" className="ms-group-header" onClick={() => toggleExpand(group.service)}>
++                <span className={`ms-chevron ${isOpen ? "ms-chevron-open" : ""}`}>▸</span>
++                <span className="ms-group-name">{group.display_service}</span>
++                <span className={`ms-badge ms-badge-${group.category}`}>{group.category}</span>
++                <span className="ms-namespace">{group.namespace}</span>
++                <span className="ms-spacer" />
++                {group.metrics.length > 0 && (
++                  <>
++                    <span className="ms-group-count">{selCount}/{group.metrics.length}</span>
++                    <span
++                      className="ms-select-all"
++                      onClick={(e) => { e.stopPropagation(); toggleService(group, allOn); }}
++                    >
++                      {allOn ? "Deselect all" : "Select all"}
++                    </span>
++                  </>
++                )}
++              </button>
++
++              {isOpen && (
++                <div className="ms-group-body">
++                  {isDirectoryEmpty && (
++                    <div className="ms-discover-row">
++                      <span className="ms-discover-hint">
++                        Metric names for this service aren't pre-loaded — discover what your account actually publishes.
++                      </span>
++                      {onDiscover ? (
++                        <button
++                          type="button"
++                          className="ms-btn-ghost"
++                          disabled={discovering === group.namespace}
++                          onClick={() => handleDiscover(group)}
++                        >
++                          {discovering === group.namespace ? "Discovering…" : "Discover metrics"}
++                        </button>
++                      ) : (
++                        <span className="ms-discover-hint-sub">Available after the account is onboarded (Settings → Metrics).</span>
++                      )}
++                    </div>
++                  )}
++                  {group.metrics.map(m => (
++                    <label key={m.id} className="ms-metric-row">
++                      <input
++                        type="checkbox"
++                        checked={selectedIds.has(m.id)}
++                        onChange={() => toggleMetric(m.id)}
++                      />
++                      <span className="ms-metric-name">{m.metric_name}</span>
++                      <span className="ms-metric-stat">{m.statistic}{m.unit ? ` · ${m.unit}` : ""}</span>
++                      {m.description && <span className="ms-metric-desc">{m.description}</span>}
++                      {m.is_default && <span className="ms-default-tag">recommended</span>}
++                    </label>
++                  ))}
++                </div>
++              )}
++            </div>
++          );
++        })}
++      </div>
++    </div>
++  );
++}
+diff --git a/frontend/src/pages/AccountOnboarding.css b/frontend/src/pages/AccountOnboarding.css
+index 6f972f6..2078d2d 100644
+--- a/frontend/src/pages/AccountOnboarding.css
++++ b/frontend/src/pages/AccountOnboarding.css
+@@ -252,4 +252,17 @@
+ [data-theme="light"] .obs-empty-sub   { color: #8099bb; }
+ [data-theme="light"] .obs-item        { background: #f5f8fd; border-color: rgba(99,130,190,0.15); }
+ [data-theme="light"] .obs-item-name   { color: #0f1c35; }
+-[data-theme="light"] .obs-item-id     { color: #8099bb; }
+\ No newline at end of file
++[data-theme="light"] .obs-item-id     { color: #8099bb; }
++/* Metrics-to-monitor step */
++.ob-metrics-hint {
++  font-size: 12px;
++  color: var(--text-muted);
++  margin: -4px 0 10px 0;
++  line-height: 1.5;
++}
++.ob-metrics-loading {
++  padding: 24px;
++  text-align: center;
++  color: var(--text-muted);
++  font-size: 13px;
++}
+diff --git a/frontend/src/pages/AccountOnboarding.jsx b/frontend/src/pages/AccountOnboarding.jsx
+index cd4450d..9cb8419 100644
+--- a/frontend/src/pages/AccountOnboarding.jsx
++++ b/frontend/src/pages/AccountOnboarding.jsx
+@@ -1,5 +1,7 @@
+ ﻿// monitoring-hub/frontend/src/pages/AccountOnboarding.jsx
+ import { useState, useEffect } from "react";
++import MetricSelector from "../components/MetricSelector";
++import { getMetricCatalog } from "../api/api";
+ import "./AccountOnboarding.css";
+ 
+ const BASE = "";
+@@ -82,6 +84,10 @@ export default function AccountOnboarding() {
+   const [success, setSuccess] = useState(null);
+   const [apiErr,  setApiErr]  = useState(null);
+ 
++  const [catalog,        setCatalog]        = useState([]);
++  const [selectedIds,    setSelectedIds]    = useState(new Set());
++  const [catalogLoading, setCatalogLoading] = useState(true);
++
+   useEffect(() => {
+     refreshQueue(setQueue);
+     // Poll queue every 15s to catch backend-side updates
+@@ -89,6 +95,18 @@ export default function AccountOnboarding() {
+     return () => clearInterval(t);
+   }, []);
+ 
++  useEffect(() => {
++    getMetricCatalog()
++      .then(data => {
++        setCatalog(Array.isArray(data) ? data : []);
++        const defaults = new Set();
++        (data || []).forEach(g => g.metrics.forEach(m => { if (m.is_default) defaults.add(m.id); }));
++        setSelectedIds(defaults);
++      })
++      .catch(() => setCatalog([]))
++      .finally(() => setCatalogLoading(false));
++  }, []);
++
+   function validate() {
+     const e = {};
+     if (!form.account_name.trim())   e.account_name   = "Required";
+@@ -131,6 +149,7 @@ export default function AccountOnboarding() {
+         external_id:    form.auth_method === "iam_role"    ? form.external_id.trim()  : "",
+         access_key:     form.auth_method === "access_keys" ? form.access_key.trim()   : "",
+         secret_key:     form.auth_method === "access_keys" ? form.secret_key.trim()   : "",
++        selected_metric_ids: Array.from(selectedIds),
+       };
+       const res = await fetch(`${BASE}/api/admin/accounts`, {
+         method:  "POST",
+@@ -161,6 +180,9 @@ export default function AccountOnboarding() {
+     setErrors({});
+     setApiErr(null);
+     setSuccess(null);
++    const defaults = new Set();
++    catalog.forEach(g => g.metrics.forEach(m => { if (m.is_default) defaults.add(m.id); }));
++    setSelectedIds(defaults);
+   }
+ 
+   return (
+@@ -338,6 +360,25 @@ export default function AccountOnboarding() {
+             )}
+           </div>
+ 
++          {/* Metrics to Monitor */}
++          <div className="ob-section">
++            <div className="ob-section-title">METRICS TO MONITOR</div>
++            <p className="ob-metrics-hint">
++              Recommended cost-optimized defaults are pre-selected. Add or remove any
++              metric now, or come back later from Settings → Metrics for this account.
++            </p>
++            {catalogLoading ? (
++              <div className="ob-metrics-loading">Loading metric catalog…</div>
++            ) : (
++              <MetricSelector
++                catalog={catalog}
++                selectedIds={selectedIds}
++                onChange={setSelectedIds}
++                compact
++              />
++            )}
++          </div>
++
+           <div className="ob-actions">
+             <button type="button" className="ob-btn-ghost" onClick={handleReset}>
+               Clear Form
+diff --git a/frontend/src/pages/Settings.jsx b/frontend/src/pages/Settings.jsx
+index bcdf0a7..08ca9cf 100644
+--- a/frontend/src/pages/Settings.jsx
++++ b/frontend/src/pages/Settings.jsx
+@@ -1,5 +1,10 @@
+ ﻿// monitoring-hub/frontend/src/pages/Settings.jsx
+ import { useState, useEffect, useCallback } from "react";
++import MetricSelector from "../components/MetricSelector";
++import {
++  getAccountMetrics, saveAccountMetrics,
++  applyDefaultTemplate, discoverNamespaceMetrics, downloadYaceConfig,
++} from "../api/api";
+ import "./Settings.css";
+ 
+ const BASE = "";
+@@ -39,6 +44,99 @@ export default function Settings() {
+   const [email,       setEmail]       = useState("");
+   const [webhook,     setWebhook]     = useState("");
+ 
++  const [metricCatalog,   setMetricCatalog]   = useState([]);
++  const [metricSelected,  setMetricSelected]  = useState(new Set());
++  const [metricsLoading,  setMetricsLoading]  = useState(true);
++  const [metricsDirty,    setMetricsDirty]    = useState(false);
++  const [metricsSaving,   setMetricsSaving]   = useState(false);
++  const [metricsSaveMsg,  setMetricsSaveMsg]  = useState(null);
++
++  const loadAccountMetrics = useCallback(async () => {
++    if (!accountId) return;
++    setMetricsLoading(true);
++    try {
++      const data = await getAccountMetrics(accountId);
++      const groups = Array.isArray(data) ? data : [];
++      setMetricCatalog(groups);
++      const enabled = new Set();
++      groups.forEach(g => g.metrics.forEach(m => { if (m.enabled) enabled.add(m.id); }));
++      setMetricSelected(enabled);
++      setMetricsDirty(false);
++    } catch (e) {
++      console.error("Load account metrics:", e);
++    } finally {
++      setMetricsLoading(false);
++    }
++  }, [accountId]);
++
++  useEffect(() => { loadAccountMetrics(); }, [loadAccountMetrics]);
++
++  function onMetricSelectionChange(nextSet) {
++    setMetricSelected(nextSet);
++    setMetricsDirty(true);
++    setMetricsSaveMsg(null);
++  }
++
++  async function saveMetricSelection() {
++    if (!accountId) return;
++    setMetricsSaving(true);
++    try {
++      await saveAccountMetrics(accountId, Array.from(metricSelected));
++      setMetricsDirty(false);
++      setMetricsSaveMsg("Saved");
++      setTimeout(() => setMetricsSaveMsg(null), 2500);
++    } catch (e) {
++      setMetricsSaveMsg("Save failed");
++    } finally {
++      setMetricsSaving(false);
++    }
++  }
++
++  async function resetToDefaultMetrics() {
++    if (!accountId) return;
++    setMetricsSaving(true);
++    try {
++      await applyDefaultTemplate(accountId);
++      await loadAccountMetrics();
++      setMetricsSaveMsg("Reset to recommended defaults");
++      setTimeout(() => setMetricsSaveMsg(null), 2500);
++    } finally {
++      setMetricsSaving(false);
++    }
++  }
++
++  async function handleDiscoverNamespace(namespace) {
++    if (!accountId) return;
++    await discoverNamespaceMetrics(accountId, namespace);
++    await loadAccountMetrics();
++  }
++
++  async function handleDownloadYaceConfig() {
++    if (!accountId) return;
++    try {
++      const token = localStorage.getItem("token");
++      const res = await fetch(downloadYaceConfig(accountId), {
++        headers: token ? { Authorization: `Bearer ${token}` } : {},
++      });
++      if (!res.ok) {
++        const body = await res.json().catch(() => ({}));
++        throw new Error(body.detail || `HTTP ${res.status}`);
++      }
++      const blob = await res.blob();
++      const url = URL.createObjectURL(blob);
++      const a = document.createElement("a");
++      a.href = url;
++      a.download = `yace-config-${selectedAccount?.account_name || accountId}.yml`;
++      document.body.appendChild(a);
++      a.click();
++      a.remove();
++      URL.revokeObjectURL(url);
++    } catch (e) {
++      setMetricsSaveMsg(`YACE config: ${e.message}`);
++      setTimeout(() => setMetricsSaveMsg(null), 4000);
++    }
++  }
++
+   // Load all accounts for the selector
+   useEffect(() => {
+     fetch(`${BASE}/api/admin/accounts`)
+@@ -289,6 +387,57 @@ export default function Settings() {
+         )}
+       </div>
+ 
++      {/* Metrics to Monitor */}
++      <div className="settings-card">
++        <div className="card-header">
++          <div className="card-title-row">
++            <span className="card-icon">🧭</span>
++            <span className="card-title">METRICS TO MONITOR</span>
++            {selectedAccount && (
++              <span style={{ marginLeft: 10, fontSize: 12, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
++                {selectedAccount.account_name}
++              </span>
++            )}
++          </div>
++          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
++            {metricsSaveMsg && (
++              <span style={{ fontSize: 12, color: metricsSaveMsg === "Save failed" ? "var(--red)" : "var(--green)" }}>
++                {metricsSaveMsg}
++              </span>
++            )}
++            <button className="btn-clear" onClick={resetToDefaultMetrics} disabled={metricsSaving || !accountId}>
++              ↺ Reset to Recommended
++            </button>
++            <button className="btn-clear" onClick={handleDownloadYaceConfig} disabled={!accountId}>
++              ⬇ Download YACE Config
++            </button>
++            <button className="btn-check" onClick={saveMetricSelection} disabled={metricsSaving || !metricsDirty}>
++              {metricsSaving ? "⏳ Saving…" : "💾 Save Selection"}
++            </button>
++          </div>
++        </div>
++
++        {metricsLoading ? (
++          <div style={{ padding: 40, textAlign: "center", color: "var(--text-muted)" }}>Loading metric catalog…</div>
++        ) : !accountId ? (
++          <div style={{ padding: 40, textAlign: "center", color: "var(--text-muted)" }}>Select an account above.</div>
++        ) : (
++          <div style={{ padding: "12px 20px 20px" }}>
++            <p style={{ fontSize: 11, color: "var(--text-muted)", margin: "0 0 10px 0" }}>
++              "Download YACE Config" generates a discovery config.yml from the metrics enabled below —
++              deploy it to this account/region's own monitoring server (CloudWatch → YACE → local VictoriaMetrics)
++              and reload YACE there. Nothing is pushed automatically.
++            </p>
++            <MetricSelector
++              catalog={metricCatalog}
++              selectedIds={metricSelected}
++              onChange={onMetricSelectionChange}
++              onDiscover={handleDiscoverNamespace}
++            />
++          </div>
++        )}
++      </div>
++
+       {/* Security */}
+       <div className="settings-card">
+         <div className="card-header-simple">
+diff --git a/scripts/seed_metric_catalog.py b/scripts/seed_metric_catalog.py
+new file mode 100644
+index 0000000..3a317c2
+--- /dev/null
++++ b/scripts/seed_metric_catalog.py
+@@ -0,0 +1,85 @@
++# scripts/seed_metric_catalog.py
++"""
++Seeds the metric_catalog table from app/aws/metric_catalog_data.py.
++
++Idempotent — safe to re-run any time the data file changes (e.g. after
++adding a new curated service). Existing rows are updated in place;
++nothing is deleted, so any account_metric_selections stay valid.
++
++Usage:
++    python scripts/seed_metric_catalog.py
++Requires DB_HOST / DB_PORT / DB_USER / DB_PASSWORD / DB_NAME env vars
++(same as the app — see app/db.py), or falls back to the same local
++defaults used there.
++"""
++import os
++import sys
++
++sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
++
++import mysql.connector
++from app.aws.metric_catalog_data import CURATED, DIRECTORY
++
++DB_CONFIG = dict(
++    host=os.getenv("DB_HOST", "127.0.0.1"),
++    port=int(os.getenv("DB_PORT", 3306)),
++    user=os.getenv("DB_USER", "monitor"),
++    password=os.getenv("DB_PASSWORD", "root123"),
++    database=os.getenv("DB_NAME", "monitoring_hub"),
++)
++
++
++def main():
++    conn = mysql.connector.connect(**DB_CONFIG)
++    cur = conn.cursor()
++
++    curated_count = 0
++    for service_key, (display_name, namespace, category, metrics) in CURATED.items():
++        for metric_name, unit, statistic, is_default, description in metrics:
++            cur.execute("""
++                INSERT INTO metric_catalog
++                    (service, namespace, display_service, metric_name,
++                     statistic, unit, default_interval, category, description,
++                     is_default, enabled)
++                VALUES (%s,%s,%s,%s,%s,%s,60,%s,%s,%s,1)
++                ON DUPLICATE KEY UPDATE
++                    service         = VALUES(service),
++                    display_service = VALUES(display_service),
++                    statistic       = VALUES(statistic),
++                    unit            = VALUES(unit),
++                    category        = VALUES(category),
++                    description     = VALUES(description),
++                    is_default      = VALUES(is_default)
++            """, (service_key, namespace, display_name, metric_name,
++                  statistic, unit, category, description, int(is_default)))
++            curated_count += 1
++
++    directory_count = 0
++    curated_namespaces = {ns for _, ns, _, _ in CURATED.values()}
++    for display_name, namespace in DIRECTORY:
++        if namespace in curated_namespaces:
++            continue
++        service_key = namespace.split("/")[-1].lower().replace(" ", "-")
++        # metric_name uses a '' sentinel (not NULL) so the (namespace, metric_name)
++        # unique key dedupes correctly on re-seed — MySQL treats NULLs as distinct.
++        cur.execute("""
++            INSERT INTO metric_catalog
++                (service, namespace, display_service, metric_name,
++                 statistic, unit, default_interval, category, description,
++                 is_default, enabled)
++            VALUES (%s,%s,%s,'',NULL,NULL,300,'directory',
++                    'Namespace registered — use Discover to fetch live metric names',
++                    0,1)
++            ON DUPLICATE KEY UPDATE
++                display_service = VALUES(display_service)
++        """, (service_key, namespace, display_name))
++        directory_count += 1
++
++    conn.commit()
++    cur.close()
++    conn.close()
++    print(f"Seeded {curated_count} curated metrics and {directory_count} directory namespaces.")
++
++
++if __name__ == "__main__":
++    main()

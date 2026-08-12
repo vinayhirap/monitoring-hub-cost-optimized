@@ -16,6 +16,7 @@ from app.api.admin.users    import router as admin_users_router
 from app.api.settings       import router as settings_router
 from app.api.live_data      import router as live_data_router
 from app.api.audit_logs     import router as audit_logs_router
+from app.api.metric_catalog import router as metric_catalog_router
 
 from app.ws.manager import ws_manager
 from app.ws.pusher  import redis_listener
@@ -89,3 +90,4 @@ app.include_router(admin_users_router)
 app.include_router(live_data_router)
 app.include_router(audit_logs_router)
 app.include_router(settings_router)
+app.include_router(metric_catalog_router)

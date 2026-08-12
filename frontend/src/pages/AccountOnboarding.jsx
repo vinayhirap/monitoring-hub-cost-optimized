@@ -1,5 +1,7 @@
 ﻿// monitoring-hub/frontend/src/pages/AccountOnboarding.jsx
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import MetricSelector from "../components/MetricSelector";
+import { getMetricCatalog } from "../api/api";
 import "./AccountOnboarding.css";
 
 const BASE = "";
@@ -82,12 +84,37 @@ export default function AccountOnboarding() {
   const [success, setSuccess] = useState(null);
   const [apiErr,  setApiErr]  = useState(null);
 
+  const [catalog,        setCatalog]        = useState([]);
+  const [selectedIds,    setSelectedIds]    = useState(new Set());
+  const [catalogLoading, setCatalogLoading] = useState(true);
+  const defaultsAppliedRef = useRef(false);
+
   useEffect(() => {
     refreshQueue(setQueue);
     // Poll queue every 15s to catch backend-side updates
     const t = setInterval(() => refreshQueue(setQueue), 15000);
     return () => clearInterval(t);
   }, []);
+
+  useEffect(() => {
+    getMetricCatalog()
+      .then(data => setCatalog(Array.isArray(data) ? data : []))
+      .catch(() => setCatalog([]))
+      .finally(() => setCatalogLoading(false));
+  }, []);
+
+  // Applies recommended defaults once the catalog actually arrives — kept as
+  // its own effect (rather than inline in the fetch above) so it reliably
+  // fires whenever `catalog` changes, and only the first time so it never
+  // clobbers a selection the user has already started editing.
+  useEffect(() => {
+    if (catalog.length > 0 && !defaultsAppliedRef.current) {
+      const defaults = new Set();
+      catalog.forEach(g => g.metrics.forEach(m => { if (m.is_default) defaults.add(m.id); }));
+      setSelectedIds(defaults);
+      defaultsAppliedRef.current = true;
+    }
+  }, [catalog]);
 
   function validate() {
     const e = {};
@@ -131,6 +158,7 @@ export default function AccountOnboarding() {
         external_id:    form.auth_method === "iam_role"    ? form.external_id.trim()  : "",
         access_key:     form.auth_method === "access_keys" ? form.access_key.trim()   : "",
         secret_key:     form.auth_method === "access_keys" ? form.secret_key.trim()   : "",
+        selected_metric_ids: Array.from(selectedIds),
       };
       const res = await fetch(`${BASE}/api/admin/accounts`, {
         method:  "POST",
@@ -161,6 +189,9 @@ export default function AccountOnboarding() {
     setErrors({});
     setApiErr(null);
     setSuccess(null);
+    const defaults = new Set();
+    catalog.forEach(g => g.metrics.forEach(m => { if (m.is_default) defaults.add(m.id); }));
+    setSelectedIds(defaults);
   }
 
   return (
@@ -335,6 +366,25 @@ export default function AccountOnboarding() {
                   />
                 </Field>
               </div>
+            )}
+          </div>
+
+          {/* Metrics to Monitor */}
+          <div className="ob-section">
+            <div className="ob-section-title">METRICS TO MONITOR</div>
+            <p className="ob-metrics-hint">
+              Recommended cost-optimized defaults are pre-selected. Add or remove any
+              metric now, or come back later from Settings → Metrics for this account.
+            </p>
+            {catalogLoading ? (
+              <div className="ob-metrics-loading">Loading metric catalog…</div>
+            ) : (
+              <MetricSelector
+                catalog={catalog}
+                selectedIds={selectedIds}
+                onChange={setSelectedIds}
+                compact
+              />
             )}
           </div>
 

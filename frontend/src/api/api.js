@@ -41,3 +41,19 @@ export const getAuditLogs     = (limit=100) => apiFetch(`/api/audit-logs?limit=$
 // ── Auth ──────────────────────────────────────────────────────
 export const login = (username, password) =>
   apiFetch("/api/auth/login", { method:"POST", body: JSON.stringify({ username, password }) });
+
+// ── Metric catalog ───────────────────────────────────────────────
+export const getMetricCatalog        = (params = {}) => {
+  const qs = new URLSearchParams(params).toString();
+  return apiFetch(`/api/metric-catalog${qs ? `?${qs}` : ""}`);
+};
+export const getMetricCatalogServices = () => apiFetch("/api/metric-catalog/services");
+export const getDefaultTemplate       = () => apiFetch("/api/metric-catalog/default-template");
+export const getAccountMetrics        = (accountId) => apiFetch(`/api/account-metrics/${accountId}`);
+export const saveAccountMetrics       = (accountId, enabledIds) =>
+  apiFetch(`/api/account-metrics/${accountId}`, { method: "PUT", body: JSON.stringify({ enabled_metric_ids: enabledIds }) });
+export const applyDefaultTemplate     = (accountId) =>
+  apiFetch(`/api/account-metrics/${accountId}/apply-default`, { method: "POST" });
+export const discoverNamespaceMetrics = (accountId, namespace, region) =>
+  apiFetch(`/api/account-metrics/${accountId}/discover?namespace=${encodeURIComponent(namespace)}${region ? `&region=${region}` : ""}`, { method: "POST" });
+export const downloadYaceConfig = (accountId) => `/api/account-metrics/${accountId}/yace-config`;

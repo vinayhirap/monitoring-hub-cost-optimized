@@ -95,6 +95,11 @@ def add_account(payload: dict = Body(...)):
     if role_arn.lower() in ["n/a", "none", "na", ""]:
         role_arn = ""
 
+    # Optional: list of metric_catalog IDs the user picked in the onboarding
+    # wizard's "Metrics to Monitor" step. If omitted, the recommended default
+    # template is applied automatically.
+    selected_metric_ids = payload.get("selected_metric_ids")
+
     conn   = get_connection()
     cursor = conn.cursor()
     try:
@@ -112,12 +117,27 @@ def add_account(payload: dict = Body(...)):
               environment    = VALUES(environment)
         """, (account_name, account_id, role_arn, external_id, region, description, owner_team, environment))
         conn.commit()
-        new_id = cursor.lastrowid or 0
+
+        if cursor.lastrowid:
+            new_id = cursor.lastrowid
+        else:
+            cursor.execute("SELECT id FROM aws_accounts WHERE account_id = %s", (account_id,))
+            new_id = cursor.fetchone()[0]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"DB error: {str(e)}")
     finally:
         cursor.close()
         conn.close()
+
+    try:
+        from app.api.metric_catalog import seed_account_defaults
+        if selected_metric_ids:
+            from app.api.metric_catalog import set_account_metrics
+            set_account_metrics(new_id, {"enabled_metric_ids": selected_metric_ids})
+        else:
+            seed_account_defaults(new_id)
+    except Exception as e:
+        print(f"Metric template seed error: {e}")
 
     _bust_accounts_cache()
     _write_audit("admin", "Account onboarded", f"{account_name} ({account_id}) region={region}")

@@ -1,5 +1,10 @@
 ﻿// monitoring-hub/frontend/src/pages/Settings.jsx
 import { useState, useEffect, useCallback } from "react";
+import MetricSelector from "../components/MetricSelector";
+import {
+  getAccountMetrics, saveAccountMetrics,
+  applyDefaultTemplate, discoverNamespaceMetrics, downloadYaceConfig,
+} from "../api/api";
 import "./Settings.css";
 
 const BASE = "";
@@ -38,6 +43,99 @@ export default function Settings() {
   const [emailOn,     setEmailOn]     = useState(false);
   const [email,       setEmail]       = useState("");
   const [webhook,     setWebhook]     = useState("");
+
+  const [metricCatalog,   setMetricCatalog]   = useState([]);
+  const [metricSelected,  setMetricSelected]  = useState(new Set());
+  const [metricsLoading,  setMetricsLoading]  = useState(true);
+  const [metricsDirty,    setMetricsDirty]    = useState(false);
+  const [metricsSaving,   setMetricsSaving]   = useState(false);
+  const [metricsSaveMsg,  setMetricsSaveMsg]  = useState(null);
+
+  const loadAccountMetrics = useCallback(async () => {
+    if (!accountId) return;
+    setMetricsLoading(true);
+    try {
+      const data = await getAccountMetrics(accountId);
+      const groups = Array.isArray(data) ? data : [];
+      setMetricCatalog(groups);
+      const enabled = new Set();
+      groups.forEach(g => g.metrics.forEach(m => { if (m.enabled) enabled.add(m.id); }));
+      setMetricSelected(enabled);
+      setMetricsDirty(false);
+    } catch (e) {
+      console.error("Load account metrics:", e);
+    } finally {
+      setMetricsLoading(false);
+    }
+  }, [accountId]);
+
+  useEffect(() => { loadAccountMetrics(); }, [loadAccountMetrics]);
+
+  function onMetricSelectionChange(nextSet) {
+    setMetricSelected(nextSet);
+    setMetricsDirty(true);
+    setMetricsSaveMsg(null);
+  }
+
+  async function saveMetricSelection() {
+    if (!accountId) return;
+    setMetricsSaving(true);
+    try {
+      await saveAccountMetrics(accountId, Array.from(metricSelected));
+      setMetricsDirty(false);
+      setMetricsSaveMsg("Saved");
+      setTimeout(() => setMetricsSaveMsg(null), 2500);
+    } catch (e) {
+      setMetricsSaveMsg("Save failed");
+    } finally {
+      setMetricsSaving(false);
+    }
+  }
+
+  async function resetToDefaultMetrics() {
+    if (!accountId) return;
+    setMetricsSaving(true);
+    try {
+      await applyDefaultTemplate(accountId);
+      await loadAccountMetrics();
+      setMetricsSaveMsg("Reset to recommended defaults");
+      setTimeout(() => setMetricsSaveMsg(null), 2500);
+    } finally {
+      setMetricsSaving(false);
+    }
+  }
+
+  async function handleDiscoverNamespace(namespace) {
+    if (!accountId) return;
+    await discoverNamespaceMetrics(accountId, namespace);
+    await loadAccountMetrics();
+  }
+
+  async function handleDownloadYaceConfig() {
+    if (!accountId) return;
+    try {
+      const token = localStorage.getItem("token");
+      const res = await fetch(downloadYaceConfig(accountId), {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `yace-config-${selectedAccount?.account_name || accountId}.yml`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setMetricsSaveMsg(`YACE config: ${e.message}`);
+      setTimeout(() => setMetricsSaveMsg(null), 4000);
+    }
+  }
 
   // Load all accounts for the selector
   useEffect(() => {
@@ -286,6 +384,57 @@ export default function Settings() {
               saveMsg={saveMsg}
             />
           ))
+        )}
+      </div>
+
+      {/* Metrics to Monitor */}
+      <div className="settings-card">
+        <div className="card-header">
+          <div className="card-title-row">
+            <span className="card-icon">🧭</span>
+            <span className="card-title">METRICS TO MONITOR</span>
+            {selectedAccount && (
+              <span style={{ marginLeft: 10, fontSize: 12, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+                {selectedAccount.account_name}
+              </span>
+            )}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {metricsSaveMsg && (
+              <span style={{ fontSize: 12, color: metricsSaveMsg === "Save failed" ? "var(--red)" : "var(--green)" }}>
+                {metricsSaveMsg}
+              </span>
+            )}
+            <button className="btn-clear" onClick={resetToDefaultMetrics} disabled={metricsSaving || !accountId}>
+              ↺ Reset to Recommended
+            </button>
+            <button className="btn-clear" onClick={handleDownloadYaceConfig} disabled={!accountId}>
+              ⬇ Download YACE Config
+            </button>
+            <button className="btn-check" onClick={saveMetricSelection} disabled={metricsSaving || !metricsDirty}>
+              {metricsSaving ? "⏳ Saving…" : "💾 Save Selection"}
+            </button>
+          </div>
+        </div>
+
+        {metricsLoading ? (
+          <div style={{ padding: 40, textAlign: "center", color: "var(--text-muted)" }}>Loading metric catalog…</div>
+        ) : !accountId ? (
+          <div style={{ padding: 40, textAlign: "center", color: "var(--text-muted)" }}>Select an account above.</div>
+        ) : (
+          <div style={{ padding: "12px 20px 20px" }}>
+            <p style={{ fontSize: 11, color: "var(--text-muted)", margin: "0 0 10px 0" }}>
+              "Download YACE Config" generates a discovery config.yml from the metrics enabled below —
+              deploy it to this account/region's own monitoring server (CloudWatch → YACE → local VictoriaMetrics)
+              and reload YACE there. Nothing is pushed automatically.
+            </p>
+            <MetricSelector
+              catalog={metricCatalog}
+              selectedIds={metricSelected}
+              onChange={onMetricSelectionChange}
+              onDiscover={handleDiscoverNamespace}
+            />
+          </div>
         )}
       </div>
 

@@ -1,0 +1,178 @@
+diff --git a/frontend/src/components/MetricSelector.jsx b/frontend/src/components/MetricSelector.jsx
+index 1043631..6a68e03 100644
+--- a/frontend/src/components/MetricSelector.jsx
++++ b/frontend/src/components/MetricSelector.jsx
+@@ -39,7 +39,11 @@ export default function MetricSelector({ catalog, selectedIds, onChange, onDisco
+         );
+         return { ...g, metrics };
+       })
+-      .filter(g => g.metrics.length > 0 || (q && (g.display_service || "").toLowerCase().includes(q)));
++      // Keep a group when: no active search (directory services legitimately
++      // have 0 metrics until discovered — they must still show up), OR it has
++      // matching metrics, OR its service name itself matches the search.
++      .filter(g => !q || g.metrics.length > 0 || (g.display_service || "").toLowerCase().includes(q))
++      .filter(g => g.display_service); // defensively hide any orphaned/unlabeled catalog rows
+   }, [catalog, search, tab]);
+ 
+   const totalSelected = selectedIds.size;
+diff --git a/frontend/src/pages/AccountOnboarding.jsx b/frontend/src/pages/AccountOnboarding.jsx
+index 9cb8419..58164b3 100644
+--- a/frontend/src/pages/AccountOnboarding.jsx
++++ b/frontend/src/pages/AccountOnboarding.jsx
+@@ -1,5 +1,5 @@
+ ﻿// monitoring-hub/frontend/src/pages/AccountOnboarding.jsx
+-import { useState, useEffect } from "react";
++import { useState, useEffect, useRef } from "react";
+ import MetricSelector from "../components/MetricSelector";
+ import { getMetricCatalog } from "../api/api";
+ import "./AccountOnboarding.css";
+@@ -87,6 +87,7 @@ export default function AccountOnboarding() {
+   const [catalog,        setCatalog]        = useState([]);
+   const [selectedIds,    setSelectedIds]    = useState(new Set());
+   const [catalogLoading, setCatalogLoading] = useState(true);
++  const defaultsAppliedRef = useRef(false);
+ 
+   useEffect(() => {
+     refreshQueue(setQueue);
+@@ -97,16 +98,24 @@ export default function AccountOnboarding() {
+ 
+   useEffect(() => {
+     getMetricCatalog()
+-      .then(data => {
+-        setCatalog(Array.isArray(data) ? data : []);
+-        const defaults = new Set();
+-        (data || []).forEach(g => g.metrics.forEach(m => { if (m.is_default) defaults.add(m.id); }));
+-        setSelectedIds(defaults);
+-      })
++      .then(data => setCatalog(Array.isArray(data) ? data : []))
+       .catch(() => setCatalog([]))
+       .finally(() => setCatalogLoading(false));
+   }, []);
+ 
++  // Applies recommended defaults once the catalog actually arrives — kept as
++  // its own effect (rather than inline in the fetch above) so it reliably
++  // fires whenever `catalog` changes, and only the first time so it never
++  // clobbers a selection the user has already started editing.
++  useEffect(() => {
++    if (catalog.length > 0 && !defaultsAppliedRef.current) {
++      const defaults = new Set();
++      catalog.forEach(g => g.metrics.forEach(m => { if (m.is_default) defaults.add(m.id); }));
++      setSelectedIds(defaults);
++      defaultsAppliedRef.current = true;
++    }
++  }, [catalog]);
++
+   function validate() {
+     const e = {};
+     if (!form.account_name.trim())   e.account_name   = "Required";
+diff --git a/scripts/seed_metric_catalog.py b/scripts/seed_metric_catalog.py
+index 3a317c2..7bca35a 100644
+--- a/scripts/seed_metric_catalog.py
++++ b/scripts/seed_metric_catalog.py
+@@ -4,7 +4,18 @@ Seeds the metric_catalog table from app/aws/metric_catalog_data.py.
+ 
+ Idempotent — safe to re-run any time the data file changes (e.g. after
+ adding a new curated service). Existing rows are updated in place;
+-nothing is deleted, so any account_metric_selections stay valid.
++nothing is deleted, so any account_metric_selections / thresholds rows
++stay valid.
++
++Handles reconciling pre-existing metric_catalog rows from the original
++seed_thresholds.sql, which used different service keys/casing than the
++curated data here (e.g. service='elb' vs 'alb', service='ecs_service'
++vs 'ecs', 'dbconnections' vs 'DatabaseConnections'). Most of those
++collide automatically via the case-insensitive (namespace, metric_name)
++unique key, but a handful don't match textually at all and were left
++behind as unlabeled orphan rows (display_service IS NULL) — those are
++explicitly remapped below by id before the main curated insert runs, so
++existing threshold references to their ids keep working.
+ 
+ Usage:
+     python scripts/seed_metric_catalog.py
+@@ -28,11 +39,55 @@ DB_CONFIG = dict(
+     database=os.getenv("DB_NAME", "monitoring_hub"),
+ )
+ 
++# (old_service, old_namespace, old_metric_name) -> (new_service, curated_metric_name)
++# Only needed for rows from the original seed_thresholds.sql that don't
++# case-insensitively match their curated equivalent's metric_name.
++LEGACY_REMAP = {
++    ("elb", "AWS/ApplicationELB", "errors5xx"):      ("alb", "HTTPCode_Target_5XX_Count"),
++    ("elb", "AWS/ApplicationELB", "errors4xx"):      ("alb", "HTTPCode_Target_4XX_Count"),
++    ("elb", "AWS/ApplicationELB", "responselatency"):("alb", "TargetResponseTime"),
++    ("elb", "AWS/ApplicationELB", "healthyhosts"):   ("alb", "HealthyHostCount"),
++    ("elb", "AWS/ApplicationELB", "unhealthyhosts"): ("alb", "UnHealthyHostCount"),
++    ("ecs_service", "AWS/ECS", "memutilization"):    ("ecs", "MemoryUtilization"),
++    ("rds", "AWS/RDS", "dbconnections"):             ("rds", "DatabaseConnections"),
++    ("rds", "AWS/RDS", "freestorage"):                ("rds", "FreeStorageSpace"),
++}
++
++
++def reconcile_legacy_rows(cur):
++    """Point orphan legacy rows at their curated metadata in place (no deletes)."""
++    fixed = 0
++    curated_lookup = {}
++    for service_key, (display_name, namespace, category, metrics) in CURATED.items():
++        for metric_name, unit, statistic, is_default, description in metrics:
++            curated_lookup[(namespace, metric_name)] = (
++                service_key, display_name, statistic, unit, category, description, is_default
++            )
++
++    for (old_service, old_namespace, old_metric_name), (new_service, new_metric_name) in LEGACY_REMAP.items():
++        meta = curated_lookup.get((old_namespace, new_metric_name))
++        if not meta:
++            continue
++        service_key, display_name, statistic, unit, category, description, is_default = meta
++        cur.execute("""
++            UPDATE metric_catalog
++               SET service = %s, metric_name = %s, display_service = %s,
++                   statistic = %s, unit = %s, category = %s,
++                   description = %s, is_default = %s
++             WHERE service = %s AND namespace = %s AND metric_name = %s
++        """, (service_key, new_metric_name, display_name, statistic, unit,
++              category, description, int(is_default),
++              old_service, old_namespace, old_metric_name))
++        fixed += cur.rowcount
++    return fixed
++
+ 
+ def main():
+     conn = mysql.connector.connect(**DB_CONFIG)
+     cur = conn.cursor()
+ 
++    reconciled = reconcile_legacy_rows(cur)
++
+     curated_count = 0
+     for service_key, (display_name, namespace, category, metrics) in CURATED.items():
+         for metric_name, unit, statistic, is_default, description in metrics:
+@@ -44,6 +99,7 @@ def main():
+                 VALUES (%s,%s,%s,%s,%s,%s,60,%s,%s,%s,1)
+                 ON DUPLICATE KEY UPDATE
+                     service         = VALUES(service),
++                    metric_name     = VALUES(metric_name),
+                     display_service = VALUES(display_service),
+                     statistic       = VALUES(statistic),
+                     unit            = VALUES(unit),
+@@ -75,10 +131,21 @@ def main():
+         """, (service_key, namespace, display_name))
+         directory_count += 1
+ 
++    # Safety net: anything still unlabeled at this point is a genuine leftover
++    # we don't have a mapping for. Don't delete it (thresholds may reference
++    # it) — just tag it so it's filtered out of the UI instead of rendering blank.
++    cur.execute("""
++        UPDATE metric_catalog
++           SET display_service = CONCAT('Legacy: ', service)
++         WHERE display_service IS NULL AND (metric_name IS NOT NULL AND metric_name != '')
++    """)
++    orphans_labeled = cur.rowcount
++
+     conn.commit()
+     cur.close()
+     conn.close()
+-    print(f"Seeded {curated_count} curated metrics and {directory_count} directory namespaces.")
++    print(f"Reconciled {reconciled} legacy rows, seeded {curated_count} curated metrics, "
++          f"{directory_count} directory namespaces, labeled {orphans_labeled} remaining orphan(s).")
+ 
+ 
+ if __name__ == "__main__":
