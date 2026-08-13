@@ -56,4 +56,5 @@ export const applyDefaultTemplate     = (accountId) =>
   apiFetch(`/api/account-metrics/${accountId}/apply-default`, { method: "POST" });
 export const discoverNamespaceMetrics = (accountId, namespace, region) =>
   apiFetch(`/api/account-metrics/${accountId}/discover?namespace=${encodeURIComponent(namespace)}${region ? `&region=${region}` : ""}`, { method: "POST" });
-export const downloadYaceConfig = (accountId) => `/api/account-metrics/${accountId}/yace-config`;
+export const downloadYaceConfig = (accountId, tier) =>
+  `/api/account-metrics/${accountId}/yace-config${tier ? `?tier=${tier}` : ""}`;

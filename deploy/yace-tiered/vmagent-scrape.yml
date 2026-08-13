@@ -1,0 +1,25 @@
+# deploy/yace-tiered/vmagent-scrape.yml
+# Standard Prometheus scrape_configs — pulls each YACE tier's /metrics
+# endpoint at the SAME cadence that tier's YACE polls CloudWatch, so
+# vmagent isn't scraping faster than there's new data (wasted, but free —
+# scraping YACE's /metrics endpoint costs nothing, it's just re-reading
+# YACE's in-memory cache; only YACE's own --scraping-interval controls
+# actual CloudWatch GetMetricData calls).
+global:
+  scrape_interval: 60s
+
+scrape_configs:
+  - job_name: "yace-critical"
+    scrape_interval: 60s
+    static_configs:
+      - targets: ["yace-critical:5000"]
+
+  - job_name: "yace-standard"
+    scrape_interval: 300s
+    static_configs:
+      - targets: ["yace-standard:5000"]
+
+  - job_name: "yace-trend"
+    scrape_interval: 900s
+    static_configs:
+      - targets: ["yace-trend:5000"]

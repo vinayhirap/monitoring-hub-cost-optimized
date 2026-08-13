@@ -39,10 +39,29 @@ def _run_collector():
         logger.error(f"Collector crashed: {e}")
 
 
+def _run_describe_poll_loop():
+    """
+    Free EC2 status + ALB target health via Describe APIs — not CloudWatch,
+    zero GetMetricData cost either way, so this runs on its own tight loop
+    (default 30s) independent of the tiered scheduler's cadence, for the
+    lowest latency the AWS Describe APIs can give us.
+    """
+    import time
+    from app.aws.describe_polling import poll_all
+    interval = 30
+    while True:
+        try:
+            poll_all()
+        except Exception as e:
+            logger.warning(f"Describe-poll loop error: {e}")
+        time.sleep(interval)
+
+
 @asynccontextmanager
 async def lifespan(app):
     # ── Startup ───────────────────────────────────────────────
     threading.Thread(target=_run_collector, daemon=True, name="collector").start()
+    threading.Thread(target=_run_describe_poll_loop, daemon=True, name="describe-poll").start()
     asyncio.create_task(_safe_redis_listener())
     logger.info("Startup complete — collector running, Redis listener started")
     yield

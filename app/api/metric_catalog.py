@@ -311,7 +311,7 @@ def discover_namespace_metrics(account_id: int, namespace: str = Query(...), reg
             INSERT INTO metric_catalog
                 (service, namespace, display_service, metric_name,
                  statistic, unit, default_interval, category, description, is_default, enabled)
-            VALUES (%s,%s,%s,%s,'Average',NULL,300,'directory','Discovered via ListMetrics',0,1)
+            VALUES (%s,%s,%s,%s,'Average',NULL,900,'directory','Discovered via ListMetrics',0,1)
             ON DUPLICATE KEY UPDATE metric_name = VALUES(metric_name)
         """, (service_key, namespace, display_service, metric_name))
     conn.commit(); cur.close(); conn.close()
@@ -322,16 +322,46 @@ def discover_namespace_metrics(account_id: int, namespace: str = Query(...), reg
 
 # ── YACE config generation ───────────────────────────────────────
 
+# Interval (seconds) -> (tier label, matching YACE --scraping-interval flag
+# flag to run that instance with). Must match TIER_INTERVAL in
+# scripts/seed_metric_catalog.py — kept as a literal copy here rather than a
+# shared import so this file has no dependency on the scripts/ package.
+_TIER_BY_INTERVAL = {60: "critical", 300: "standard", 900: "trend"}
+_SCRAPE_FLAG = {
+    "critical": "--scraping-interval=60",
+    "standard": "--scraping-interval=300",
+    "trend":    "--scraping-interval=900",
+}
+
+
 @router.get("/api/account-metrics/{account_id}/yace-config")
-def generate_yace_config(account_id: int, download: bool = Query(True)):
+def generate_yace_config(
+    account_id: int,
+    download: bool = Query(True),
+    tier: str = Query(
+        None,
+        description="Optional: 'critical' | 'standard' | 'trend'. Omit to "
+                     "get every enabled metric in one file (old behavior, "
+                     "back-compat). Pass a tier to get just that tier's "
+                     "jobs, for deploying as one of the 3 separate YACE "
+                     "instances (fix #2 in the cost-optimization plan).",
+    ),
+):
     """
     Builds a ready-to-use YACE (yet-another-cloudwatch-exporter) discovery
-    config.yml from this account's enabled metric selection, one job per
-    AWS namespace. Deploy the output to that account/region's regional
-    monitoring server (per the distributed collection architecture —
-    CloudWatch → YACE → VictoriaMetrics, local to each account/region) and
-    reload/restart YACE there. This app does not remotely push config to
-    regional servers; it only generates it.
+    config.yml from this account's enabled metric selection.
+
+    Jobs are grouped by (namespace, interval) — NOT namespace alone — so a
+    namespace with a mix of critical/standard/trend metrics (e.g. EC2
+    CPUUtilization at 60s next to CPUCreditBalance at 900s) produces
+    separate jobs instead of collapsing every metric in that namespace onto
+    its fastest member's interval. That collapse was the #2 cost bug found
+    in the last session: previously one slow metric riding along in a
+    namespace with a fast one meant nothing was actually being tiered.
+
+    Deploy the output to that account/region's regional monitoring server
+    (CloudWatch -> YACE -> local VictoriaMetrics) and reload/restart YACE
+    there. This app does not remotely push config; it only generates it.
     """
     conn = get_connection(); cur = conn.cursor(dictionary=True)
     cur.execute("""
@@ -348,26 +378,32 @@ def generate_yace_config(account_id: int, download: bool = Query(True)):
         FROM metric_catalog mc
         JOIN account_metric_selections ams ON ams.metric_id = mc.id
         WHERE ams.aws_account_id = %s AND ams.enabled = 1 AND mc.metric_name != ''
-        ORDER BY mc.namespace, mc.metric_name
+        ORDER BY mc.namespace, mc.default_interval, mc.metric_name
     """, (account_id,))
     rows = cur.fetchall(); cur.close(); conn.close()
 
     if not rows:
         raise HTTPException(status_code=400, detail="No metrics enabled for this account — nothing to generate.")
 
-    # Group into one discovery job per namespace
-    jobs_by_ns = {}
+    if tier:
+        if tier not in _SCRAPE_FLAG:
+            raise HTTPException(status_code=400, detail="tier must be critical, standard, or trend")
+        rows = [r for r in rows if _TIER_BY_INTERVAL.get(r["default_interval"] or 300, "standard") == tier]
+        if not rows:
+            raise HTTPException(status_code=400, detail=f"No enabled metrics fall in the '{tier}' tier for this account.")
+
+    # Group into one discovery job per (namespace, interval) — this is the fix.
+    jobs_by_key = {}
     for r in rows:
-        ns = r["namespace"]
-        job = jobs_by_ns.setdefault(ns, {
-            "type": ns,
+        interval = r["default_interval"] or 300
+        key = (r["namespace"], interval)
+        job = jobs_by_key.setdefault(key, {
+            "type": r["namespace"],
             "regions": [account["default_region"] or "us-east-1"],
-            "period": r["default_interval"] or 300,
-            "length": r["default_interval"] or 300,
+            "period": interval,
+            "length": interval,
             "metrics": [],
         })
-        job["period"] = min(job["period"], r["default_interval"] or 300)
-        job["length"] = job["period"]
         job["metrics"].append({
             "name": r["metric_name"],
             "statistics": [r["statistic"] or "Average"],
@@ -377,17 +413,29 @@ def generate_yace_config(account_id: int, download: bool = Query(True)):
         role_entry = {"roleArn": account["role_arn"]}
         if account["external_id"]:
             role_entry["externalId"] = account["external_id"]
-        for job in jobs_by_ns.values():
+        for job in jobs_by_key.values():
             job["roles"] = [dict(role_entry)]  # copy per job — avoids YAML anchor/alias reuse
 
     config = {
         "apiVersion": "v1alpha1",
-        "discovery": {"jobs": list(jobs_by_ns.values())},
+        "discovery": {"jobs": list(jobs_by_key.values())},
     }
 
+    tier_line = (
+        f"# Tier: {tier} — run this YACE instance with {_SCRAPE_FLAG[tier]}\n"
+        if tier else
+        "# All tiers in one file (old behavior) — every job still carries its own\n"
+        "# correct period/length, but a single YACE process only has ONE global\n"
+        "# scraping interval (--scraping-interval, decoupled-scraping is on by\n"
+        "# default), so AWS-call frequency follows whichever value you run it\n"
+        "# with. For real cost savings, generate per-tier (?tier=critical /\n"
+        "# standard / trend) and run 3 YACE instances, each with the matching\n"
+        "# --scraping-interval flag — see deploy/yace-tiered/.\n"
+    )
     header = (
         f"# YACE discovery config — generated for account "
         f"'{account['account_name']}' ({account['account_id']}), region {account['default_region']}\n"
+        f"{tier_line}"
         f"# Deploy this to the regional monitoring server for that account/region\n"
         f"# (CloudWatch -> YACE -> local VictoriaMetrics) and reload YACE.\n"
         f"# Regenerate any time the metric selection changes in Settings -> Metrics.\n\n"
@@ -397,6 +445,7 @@ def generate_yace_config(account_id: int, download: bool = Query(True)):
     headers = {}
     if download:
         safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in account["account_name"])
-        headers["Content-Disposition"] = f'attachment; filename="yace-config-{safe_name}.yml"'
+        suffix = f"-{tier}" if tier else ""
+        headers["Content-Disposition"] = f'attachment; filename="yace-config-{safe_name}{suffix}.yml"'
 
     return Response(content=yaml_text, media_type="text/yaml", headers=headers)

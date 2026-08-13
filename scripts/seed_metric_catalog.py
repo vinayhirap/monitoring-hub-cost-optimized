@@ -44,6 +44,47 @@ DB_CONFIG = dict(
 # (old_service, old_namespace, old_metric_name) -> (new_service, curated_metric_name)
 # Only needed for rows from the original seed_thresholds.sql that don't
 # case-insensitively match their curated equivalent's metric_name.
+
+# ── Cost-optimization: per-metric polling tier ─────────────────────────
+# Every curated metric was previously seeded at a flat 60s interval — the
+# #1 driver of CloudWatch GetMetricData cost, since it means AWS/S3
+# BucketSizeBytes (which AWS itself only publishes once a day) was being
+# polled just as fast as EC2 CPUUtilization. Tiering below fixes that:
+#   critical (60s)  — core-service, is_default metrics: the handful of
+#                     signals that genuinely need near-real-time polling.
+#   standard (300s) — extended-service is_default metrics.
+#   trend    (900s) — everything non-default (rarely alerted on).
+# TIER_OVERRIDES covers metrics that don't fit that heuristic: things AWS
+# only emits daily (no benefit from fast polling) and status/health
+# signals worth keeping fast even though they're not "core".
+TIER_INTERVAL = {"critical": 60, "standard": 300, "trend": 900}
+
+TIER_OVERRIDES = {
+    ("s3", "BucketSizeBytes"): "trend",
+    ("s3", "NumberOfObjects"): "trend",
+    ("alb", "HealthyHostCount"):          "critical",
+    ("alb", "UnHealthyHostCount"):        "critical",
+    ("route53", "HealthCheckStatus"):     "critical",
+    ("vpn", "TunnelState"):               "critical",
+    ("directconnect", "ConnectionState"): "critical",
+}
+
+
+def _tier_for(service_key: str, metric_name: str, category: str, is_default: bool) -> str:
+    override = TIER_OVERRIDES.get((service_key, metric_name))
+    if override:
+        return override
+    if category == "core" and is_default:
+        return "critical"
+    if is_default:
+        return "standard"
+    return "trend"
+
+
+def _interval_for(service_key: str, metric_name: str, category: str, is_default: bool) -> int:
+    return TIER_INTERVAL[_tier_for(service_key, metric_name, category, is_default)]
+
+
 LEGACY_REMAP = {
     ("elb", "AWS/ApplicationELB", "errors5xx"):      ("alb", "HTTPCode_Target_5XX_Count"),
     ("elb", "AWS/ApplicationELB", "errors4xx"):      ("alb", "HTTPCode_Target_4XX_Count"),
@@ -130,25 +171,30 @@ def main():
     reconciled, merged = reconcile_legacy_rows(cur)
 
     curated_count = 0
+    tier_counts = {"critical": 0, "standard": 0, "trend": 0}
     for service_key, (display_name, namespace, category, metrics) in CURATED.items():
         for metric_name, unit, statistic, is_default, description in metrics:
+            tier = _tier_for(service_key, metric_name, category, is_default)
+            interval = TIER_INTERVAL[tier]
+            tier_counts[tier] += 1
             cur.execute("""
                 INSERT INTO metric_catalog
                     (service, namespace, display_service, metric_name,
                      statistic, unit, default_interval, category, description,
                      is_default, enabled)
-                VALUES (%s,%s,%s,%s,%s,%s,60,%s,%s,%s,1)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,1)
                 ON DUPLICATE KEY UPDATE
-                    service         = VALUES(service),
-                    metric_name     = VALUES(metric_name),
-                    display_service = VALUES(display_service),
-                    statistic       = VALUES(statistic),
-                    unit            = VALUES(unit),
-                    category        = VALUES(category),
-                    description     = VALUES(description),
-                    is_default      = VALUES(is_default)
+                    service          = VALUES(service),
+                    metric_name      = VALUES(metric_name),
+                    display_service  = VALUES(display_service),
+                    statistic        = VALUES(statistic),
+                    unit             = VALUES(unit),
+                    default_interval = VALUES(default_interval),
+                    category         = VALUES(category),
+                    description      = VALUES(description),
+                    is_default       = VALUES(is_default)
             """, (service_key, namespace, display_name, metric_name,
-                  statistic, unit, category, description, int(is_default)))
+                  statistic, unit, interval, category, description, int(is_default)))
             curated_count += 1
 
     directory_count = 0
@@ -164,11 +210,12 @@ def main():
                 (service, namespace, display_service, metric_name,
                  statistic, unit, default_interval, category, description,
                  is_default, enabled)
-            VALUES (%s,%s,%s,'',NULL,NULL,300,'directory',
+            VALUES (%s,%s,%s,'',NULL,NULL,900,'directory',
                     'Namespace registered — use Discover to fetch live metric names',
                     0,1)
             ON DUPLICATE KEY UPDATE
-                display_service = VALUES(display_service)
+                display_service  = VALUES(display_service),
+                default_interval = VALUES(default_interval)
         """, (service_key, namespace, display_name))
         directory_count += 1
 
@@ -186,8 +233,10 @@ def main():
     cur.close()
     conn.close()
     print(f"Reconciled {reconciled} legacy rows in place, merged/removed {merged} duplicate(s), "
-          f"seeded {curated_count} curated metrics, {directory_count} directory namespaces, "
-          f"labeled {orphans_labeled} remaining orphan(s).")
+          f"seeded {curated_count} curated metrics "
+          f"(critical/60s={tier_counts['critical']}, standard/300s={tier_counts['standard']}, "
+          f"trend/900s={tier_counts['trend']}), {directory_count} directory namespaces "
+          f"(900s), labeled {orphans_labeled} remaining orphan(s).")
 
 
 if __name__ == "__main__":

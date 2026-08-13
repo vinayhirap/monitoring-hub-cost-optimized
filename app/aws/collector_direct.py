@@ -2,13 +2,30 @@
 """
 Live data collector for frontend detail pages.
 
-MIGRATION NOTE: EC2 / EBS / RDS metrics, and the subset of ALB metrics that
-YACE scrapes (RequestCount, TargetResponseTime, HealthyHostCount,
-UnHealthyHostCount, HTTPCode_Target_2XX/4XX/5XX_Count, ActiveConnectionCount)
-now come from VictoriaMetrics (fed by YACE) instead of direct CloudWatch
-GetMetricData calls. ECS, Lambda, S3, and the two ALB metrics YACE does NOT
-scrape (HTTPCode_ELB_5XX_Count, NewConnectionCount) remain on boto3/GMD since
-there is no YACE job for them.
+MIGRATION STATE (cost-optimization pass):
+  - EC2 / EBS / RDS metrics: VM-backed (fed by YACE), no boto3.
+  - ALB: all 8 metrics are VM-first with automatic per-metric boto3 fallback
+    (_get_elb_metric_series) — the 2 metrics YACE previously never scraped
+    (HTTPCode_ELB_5XX_Count, NewConnectionCount) now work the same way once
+    you enable them in the Metric Catalog and redeploy the YACE config.
+  - ECS: AWS/ECS CPUUtilization/MemoryUtilization are VM-first with boto3
+    fallback; ECS/ContainerInsights task-count fields stay boto3-only
+    (metric-name convention for that namespace not yet verified live).
+  - Lambda: VM-first with boto3 fallback (metric-name convention derived
+    from the confirmed EC2/RDS/ALB pattern but not yet verified live —
+    check `curl $VM_URL/api/v1/label/__name__/values | grep aws_lambda`
+    after first deploy).
+  - S3: still boto3-only (StorageType-dimensioned metrics need YACE storage-
+    type config which hasn't been set up; low call volume already since
+    this is only hit on a per-bucket detail-page click, not a poll loop).
+  - EC2 StatusCheckFailed (used only by check_and_write_alerts, below) now
+    reads from the FREE Describe-API path (app/aws/describe_polling.py)
+    instead of CloudWatch/YACE — zero GetMetricData cost, sub-second fresh.
+
+Every VM-first function above falls back to boto3 automatically per-metric
+if VM has no data yet, so all of this is safe to ship before the
+corresponding YACE config is actually deployed — cost drops to zero for a
+given metric only once VM genuinely has fresh data for it.
 
 Two GMD helpers (unchanged, still used for the boto3 fallback paths):
   _gmd_snapshot(cw, queries)  — latest single value per metric (for list views)
@@ -569,29 +586,64 @@ def _get_ebs_metric_series(volume_id, region=None, hours=6) -> dict:
                 "read_bytes": [], "write_bytes": [], "queue_length": []}
 
 
-# ── Metric series — Lambda (unchanged — not in YACE config) ─────────────
+# ── Metric series — Lambda (SPLIT: VM once deployed, boto3 fallback) ─────
+# Enable lambda.Invocations/Errors/Duration/Throttles/ConcurrentExecutions
+# in the Metric Catalog + deploy the generated YACE config to get these off
+# boto3 entirely. Metric-name guesses below follow the same snake-case rule
+# already confirmed live for EC2/RDS/ALB (CPUUtilization -> cpuutilization,
+# a lowercase word -> Uppercase word transition -> underscore) but haven't
+# been checked against a running YACE for AWS/Lambda specifically — verify
+# with `curl "http://<vm-host>/api/v1/label/__name__/values" | grep aws_lambda`
+# after first deploy. Falls back to boto3 automatically if VM has nothing.
 
 def _get_lambda_metric_series(function_name, region=None, hours=6) -> dict:
     try:
-        cw   = boto3.client("cloudwatch", region_name=region)
-        dims = [{"Name": "FunctionName", "Value": function_name}]
-        queries = [
-            _make_query("invocations", "AWS/Lambda", "Invocations", dims, "Sum"),
-            _make_query("errors",      "AWS/Lambda", "Errors",      dims, "Sum"),
-            _make_query("duration",    "AWS/Lambda", "Duration",    dims, "Average"),
-            _make_query("throttles",   "AWS/Lambda", "Throttles",   dims, "Sum"),
-            _make_query("concurrent",  "AWS/Lambda", "ConcurrentExecutions", dims, "Average"),
-        ]
-        s = _gmd_series(cw, queries, hours)
+        end    = datetime.now(timezone.utc)
+        start  = end - timedelta(hours=hours)
+        period = _smart_period(hours)
+        dim    = f'dimension_FunctionName="{function_name}"'
+
+        def vm_series(yace_metric):
+            return vm_query_range(
+                f'{yace_metric}{{{dim}}}',
+                start=int(start.timestamp()), end=int(end.timestamp()),
+                step=f"{period}s",
+            )
+
+        result = {
+            "invocations": vm_series("aws_lambda_invocations_sum"),
+            "errors":      vm_series("aws_lambda_errors_sum"),
+            "duration":    vm_series("aws_lambda_duration_average"),
+            "throttles":   vm_series("aws_lambda_throttles_sum"),
+            "concurrent":  vm_series("aws_lambda_concurrent_executions_average"),
+        }
+
+        missing = [k for k, v in result.items() if not v]
+        if missing:
+            cw   = boto3.client("cloudwatch", region_name=region)
+            dims = [{"Name": "FunctionName", "Value": function_name}]
+            fallback_map = {
+                "invocations": ("Invocations", "Sum"),
+                "errors":      ("Errors", "Sum"),
+                "duration":    ("Duration", "Average"),
+                "throttles":   ("Throttles", "Sum"),
+                "concurrent":  ("ConcurrentExecutions", "Average"),
+            }
+            queries = [_make_query(k, "AWS/Lambda", fallback_map[k][0], dims, fallback_map[k][1])
+                       for k in missing]
+            fb = _gmd_series(cw, queries, hours)
+            for k in missing:
+                result[k] = fb.get(k, [])
+
         return {
             "function_name": function_name,
-            "invocations":   s.get("invocations", []),
-            "errors":        s.get("errors", []),
-            "duration":      s.get("duration", []),
-            "throttles":     s.get("throttles", []),
-            "concurrent":    s.get("concurrent", []),
+            "invocations":   result["invocations"],
+            "errors":        result["errors"],
+            "duration":      result["duration"],
+            "throttles":     result["throttles"],
+            "concurrent":    result["concurrent"],
             "period_hours":  hours,
-            "period_secs":   _smart_period(hours),
+            "period_secs":   period,
         }
     except Exception as e:
         logger.warning(f"Lambda series [{function_name}]: {e}")
@@ -634,12 +686,18 @@ def _get_rds_metric_series(db_id, region=None, hours=6) -> dict:
                 "write_latency": [], "freeable_memory": []}
 
 
-# ── Metric series — ELB (SPLIT: covered metrics via VM, rest via boto3) ─
-# Your YACE config scrapes RequestCount, TargetResponseTime, HealthyHostCount,
-# UnHealthyHostCount, HTTPCode_Target_2XX/4XX/5XX_Count, ActiveConnectionCount.
-# It does NOT scrape HTTPCode_ELB_5XX_Count or NewConnectionCount — those two
-# stay on boto3 until/unless you add them to the YACE job yourself.
-# Dimension label assumed as "dimension_LoadBalancer" — verify with:
+# ── Metric series — ELB (all 8 metrics now VM-first, boto3 fallback) ────
+# Your YACE config already scrapes RequestCount, TargetResponseTime,
+# HealthyHostCount, UnHealthyHostCount, HTTPCode_Target_2XX/4XX/5XX_Count,
+# ActiveConnectionCount. HTTPCode_ELB_5XX_Count and NewConnectionCount are
+# NOT in that YACE job yet — enable "alb.HTTPCode_ELB_5XX_Count" and
+# "alb.NewConnectionCount" in the Metric Catalog and redeploy the generated
+# config to get them into YACE too; the VM names below follow the same
+# snake-case rule already confirmed for the other 6 ALB metrics in this
+# file (HTTPCode_Target_5XX_Count -> httpcode_target_5_xx_count). Until
+# then — or if VM has no data yet for any reason — this falls back to
+# boto3 automatically per-metric, so it's safe to ship either way.
+# Dimension label: "dimension_LoadBalancer" — verify with:
 #   curl "http://<vm-host>/api/v1/series?match[]=aws_applicationelb_request_count_sum"
 
 def _get_elb_metric_series(lb_name: str, region=None, hours=6) -> dict:
@@ -667,30 +725,42 @@ def _get_elb_metric_series(lb_name: str, region=None, hours=6) -> dict:
                 step=f"{period}s",
             )
 
-        # Boto3 fallback only for the two metrics YACE doesn't scrape
-        cw   = boto3.client("cloudwatch", region_name=region)
-        dims = [{"Name": "LoadBalancer", "Value": lb_dim}]
-        ns   = "AWS/ApplicationELB"
-        gmd_queries = [
-            _make_query("errors_elb_5xx", ns, "HTTPCode_ELB_5XX_Count", dims, "Sum"),
-            _make_query("new_conns",      ns, "NewConnectionCount",     dims, "Sum"),
-        ]
-        gmd = _gmd_series(cw, gmd_queries, hours)
-
-        return {
-            "lb_name":            lb_name,
+        result = {
             "requests":           vm_series("aws_applicationelb_request_count_sum"),
             "errors_5xx":         vm_series("aws_applicationelb_httpcode_target_5_xx_count_sum"),
             "errors_4xx":         vm_series("aws_applicationelb_httpcode_target_4_xx_count_sum"),
-            "errors_elb_5xx":     gmd.get("errors_elb_5xx", []),   # boto3 — not in YACE
+            "errors_elb_5xx":     vm_series("aws_applicationelb_httpcode_elb_5_xx_count_sum"),
             "latency":            vm_series("aws_applicationelb_target_response_time_average"),
             "healthy_hosts":      vm_series("aws_applicationelb_healthy_host_count_average"),
             "unhealthy_hosts":    vm_series("aws_applicationelb_un_healthy_host_count_average"),
             "active_connections": vm_series("aws_applicationelb_active_connection_count_average"),
-            "new_connections":    gmd.get("new_conns", []),        # boto3 — not in YACE
-            "period_hours":       hours,
-            "period_secs":        period,
+            "new_connections":    vm_series("aws_applicationelb_new_connection_count_sum"),
         }
+
+        missing = [k for k, v in result.items() if not v]
+        if missing:
+            cw   = boto3.client("cloudwatch", region_name=region)
+            dims = [{"Name": "LoadBalancer", "Value": lb_dim}]
+            ns   = "AWS/ApplicationELB"
+            fallback_map = {
+                "requests":           ("RequestCount", "Sum"),
+                "errors_5xx":         ("HTTPCode_Target_5XX_Count", "Sum"),
+                "errors_4xx":         ("HTTPCode_Target_4XX_Count", "Sum"),
+                "errors_elb_5xx":     ("HTTPCode_ELB_5XX_Count", "Sum"),
+                "latency":            ("TargetResponseTime", "Average"),
+                "healthy_hosts":      ("HealthyHostCount", "Average"),
+                "unhealthy_hosts":    ("UnHealthyHostCount", "Average"),
+                "active_connections": ("ActiveConnectionCount", "Average"),
+                "new_connections":    ("NewConnectionCount", "Sum"),
+            }
+            queries = [_make_query(k, ns, fallback_map[k][0], dims, fallback_map[k][1])
+                       for k in missing]
+            fb = _gmd_series(cw, queries, hours)
+            for k in missing:
+                result[k] = fb.get(k, [])
+
+        result.update({"lb_name": lb_name, "period_hours": hours, "period_secs": period})
+        return result
     except Exception as e:
         logger.warning(f"ELB series [{lb_name}]: {e}")
         return {"lb_name": lb_name, "requests": [], "errors_5xx": [], "errors_4xx": [],
@@ -698,43 +768,86 @@ def _get_elb_metric_series(lb_name: str, region=None, hours=6) -> dict:
                 "unhealthy_hosts": [], "active_connections": [], "new_connections": []}
 
 
-# ── Metric series — ECS (unchanged — not in YACE config) ────────────────
+# ── Metric series — ECS (SPLIT: AWS/ECS via VM once deployed, ─────────────
+# ContainerInsights via boto3 always — see note below)
+#
+# Once you enable ecs.CPUUtilization/MemoryUtilization in the Metric Catalog
+# and deploy the generated YACE config, these two become VM-backed like
+# EC2/EBS/RDS — same pattern as _get_elb_metric_series. If VM has no data yet
+# (not deployed, or YACE hasn't scraped this cluster yet) it falls back to
+# boto3 automatically, so this is safe to ship before the YACE side is live.
+#
+# ECS/ContainerInsights task-count metrics stay on boto3 unconditionally:
+# YACE's metric-name snake-casing for that namespace hasn't been verified
+# against a live VM instance (unlike AWS/ECS, which follows the same
+# lowercase-collapse rule already confirmed for EC2/RDS CPUUtilization).
+# Verify with:
+#   curl "http://<vm-host>/api/v1/label/__name__/values" | grep aws_ecs
+# and wire ci_series() the same way once confirmed — it's a low-volume,
+# rarely-clicked chart, so it's not a priority cost driver.
 
 def _get_ecs_metric_series(cluster_name: str, service_name: str = None,
                            region=None, hours=6) -> dict:
     try:
-        cw   = boto3.client("cloudwatch", region_name=region)
         dims = (
             [{"Name": "ClusterName", "Value": cluster_name},
              {"Name": "ServiceName", "Value": service_name}]
             if service_name
             else [{"Name": "ClusterName", "Value": cluster_name}]
         )
-        queries = [
-            _make_query("cpu", "AWS/ECS", "CPUUtilization",    dims, "Average"),
-            _make_query("mem", "AWS/ECS", "MemoryUtilization", dims, "Average"),
-        ]
+
+        end    = datetime.now(timezone.utc)
+        start  = end - timedelta(hours=hours)
+        period = _smart_period(hours)
+        dim    = f'dimension_ClusterName="{cluster_name}"'
+        if service_name:
+            dim += f',dimension_ServiceName="{service_name}"'
+
+        def vm_series(yace_metric):
+            return vm_query_range(
+                f'{yace_metric}{{{dim}}}',
+                start=int(start.timestamp()), end=int(end.timestamp()),
+                step=f"{period}s",
+            )
+
+        cpu = vm_series("aws_ecs_cpuutilization_average")
+        mem = vm_series("aws_ecs_memory_utilization_average")
+
+        # boto3 fallback for AWS/ECS if VM has nothing yet (not deployed /
+        # not scraped yet) — same safety pattern as _get_elb_metric_series.
+        if not cpu or not mem:
+            cw = boto3.client("cloudwatch", region_name=region)
+            fallback_q = [
+                _make_query("cpu", "AWS/ECS", "CPUUtilization",    dims, "Average"),
+                _make_query("mem", "AWS/ECS", "MemoryUtilization", dims, "Average"),
+            ]
+            fb = _gmd_series(cw, fallback_q, hours)
+            cpu = cpu or fb.get("cpu", [])
+            mem = mem or fb.get("mem", [])
+
+        cw = boto3.client("cloudwatch", region_name=region)
         ci_ns = "ECS/ContainerInsights"
-        queries += [
+        ci_queries = [
             _make_query("running",  ci_ns, "RunningTaskCount",  dims, "Average"),
             _make_query("pending",  ci_ns, "PendingTaskCount",  dims, "Average"),
             _make_query("desired",  ci_ns, "DesiredTaskCount",  dims, "Average"),
             _make_query("cpu_res",  ci_ns, "CpuReserved",       dims, "Average"),
             _make_query("mem_res",  ci_ns, "MemoryReserved",    dims, "Average"),
         ]
-        s = _gmd_series(cw, queries, hours)
+        ci = _gmd_series(cw, ci_queries, hours)
+
         return {
             "cluster_name":       cluster_name,
             "service_name":       service_name,
-            "cpu_utilization":    s.get("cpu", []),
-            "mem_utilization":    s.get("mem", []),
-            "running_task_count": s.get("running", []),
-            "pending_task_count": s.get("pending", []),
-            "desired_task_count": s.get("desired", []),
-            "cpu_reserved":       s.get("cpu_res", []),
-            "mem_reserved":       s.get("mem_res", []),
+            "cpu_utilization":    cpu,
+            "mem_utilization":    mem,
+            "running_task_count": ci.get("running", []),
+            "pending_task_count": ci.get("pending", []),
+            "desired_task_count": ci.get("desired", []),
+            "cpu_reserved":       ci.get("cpu_res", []),
+            "mem_reserved":       ci.get("mem_res", []),
             "period_hours":       hours,
-            "period_secs":        _smart_period(hours),
+            "period_secs":        period,
         }
     except Exception as e:
         logger.warning(f"ECS series [{cluster_name}/{service_name}]: {e}")
@@ -785,12 +898,18 @@ def check_and_write_alerts(account_id: int, region: str, thresholds: list) -> li
     # Extend this table if you threshold on new metrics that YACE scrapes.
     VM_METRIC_STUB = {
         ("ec2", "CPUUtilization"):      "aws_ec2_cpuutilization",
-        ("ec2", "StatusCheckFailed"):   "aws_ec2_status_check_failed",
+        # Free Describe-API path (fix #4, app/aws/describe_polling.py) —
+        # NOT CloudWatch/YACE. Sub-second-fresh, zero GetMetricData cost,
+        # replaces the old aws_ec2_status_check_failed (YACE/CloudWatch) stub.
+        ("ec2", "StatusCheckFailed"):   "aws_ec2_status_check_failed_describe",
         ("ebs", "VolumeQueueLength"):   "aws_ebs_volume_queue_length",
         ("ebs", "BurstBalance"):        "aws_ebs_burst_balance",
         ("rds", "CPUUtilization"):      "aws_rds_cpuutilization",
         ("rds", "FreeStorageSpace"):    "aws_rds_free_storage_space",
     }
+    # Metrics pushed directly by describe_polling.py are raw gauges (no
+    # Average/Sum/Maximum suffix) — skip the generic stat-suffix step for them.
+    VM_NO_SUFFIX = {"aws_ec2_status_check_failed_describe"}
     STAT_SUFFIX = {"Average": "average", "Sum": "sum", "Maximum": "maximum"}
 
     vm_lookups  = []   # (t_idx, resource_id, promql)
@@ -807,7 +926,7 @@ def check_and_write_alerts(account_id: int, region: str, thresholds: list) -> li
 
         if svc in VM_DIM_LABEL and stub:
             dim_label   = VM_DIM_LABEL[svc]
-            yace_metric = f"{stub}_{STAT_SUFFIX.get(stat, 'average')}"
+            yace_metric = stub if stub in VM_NO_SUFFIX else f"{stub}_{STAT_SUFFIX.get(stat, 'average')}"
             for resource_id, dims in resources:
                 vm_lookups.append((t_idx, resource_id, f'{yace_metric}{{{dim_label}="{resource_id}"}}'))
         else:

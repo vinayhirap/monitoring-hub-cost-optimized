@@ -111,11 +111,11 @@ export default function Settings() {
     await loadAccountMetrics();
   }
 
-  async function handleDownloadYaceConfig() {
+  async function handleDownloadYaceConfig(tier) {
     if (!accountId) return;
     try {
       const token = localStorage.getItem("token");
-      const res = await fetch(downloadYaceConfig(accountId), {
+      const res = await fetch(downloadYaceConfig(accountId, tier), {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!res.ok) {
@@ -126,13 +126,14 @@ export default function Settings() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `yace-config-${selectedAccount?.account_name || accountId}.yml`;
+      const suffix = tier ? `-${tier}` : "";
+      a.download = `yace-config-${selectedAccount?.account_name || accountId}${suffix}.yml`;
       document.body.appendChild(a);
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
     } catch (e) {
-      setMetricsSaveMsg(`YACE config: ${e.message}`);
+      setMetricsSaveMsg(`YACE config${tier ? ` (${tier})` : ""}: ${e.message}`);
       setTimeout(() => setMetricsSaveMsg(null), 4000);
     }
   }
@@ -408,8 +409,14 @@ export default function Settings() {
             <button className="btn-clear" onClick={resetToDefaultMetrics} disabled={metricsSaving || !accountId}>
               ↺ Reset to Recommended
             </button>
-            <button className="btn-clear" onClick={handleDownloadYaceConfig} disabled={!accountId}>
-              ⬇ Download YACE Config
+            <button className="btn-clear" onClick={() => handleDownloadYaceConfig("critical")} disabled={!accountId} title="60s poll — run as its own YACE instance">
+              ⬇ Critical (60s)
+            </button>
+            <button className="btn-clear" onClick={() => handleDownloadYaceConfig("standard")} disabled={!accountId} title="300s poll — run as its own YACE instance">
+              ⬇ Standard (300s)
+            </button>
+            <button className="btn-clear" onClick={() => handleDownloadYaceConfig("trend")} disabled={!accountId} title="900s poll — run as its own YACE instance">
+              ⬇ Trend (900s)
             </button>
             <button className="btn-check" onClick={saveMetricSelection} disabled={metricsSaving || !metricsDirty}>
               {metricsSaving ? "⏳ Saving…" : "💾 Save Selection"}
@@ -424,9 +431,12 @@ export default function Settings() {
         ) : (
           <div style={{ padding: "12px 20px 20px" }}>
             <p style={{ fontSize: 11, color: "var(--text-muted)", margin: "0 0 10px 0" }}>
-              "Download YACE Config" generates a discovery config.yml from the metrics enabled below —
-              deploy it to this account/region's own monitoring server (CloudWatch → YACE → local VictoriaMetrics)
-              and reload YACE there. Nothing is pushed automatically.
+              Each tier button generates a separate config.yml for that polling speed — deploy all three as
+              separate YACE instances on this account/region's monitoring server (Critical/60s, Standard/300s,
+              Trend/900s), each started with the matching <code>--scraping-interval</code> flag. This
+              is what actually saves GetMetricData cost: one YACE process only has one global scrape interval,
+              so splitting by tier is required for tiering to affect AWS call volume, not just query windows.
+              Nothing is pushed automatically.
             </p>
             <MetricSelector
               catalog={metricCatalog}

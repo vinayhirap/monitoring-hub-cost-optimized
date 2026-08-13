@@ -1,0 +1,113 @@
+# deploy/yace-tiered/docker-compose.yml
+#
+# Runs 3 separate YACE instances against ONE local VictoriaMetrics, each
+# polling CloudWatch at a different --scraping-interval. This is what
+# actually makes metric-catalog tiering reduce GetMetricData call volume —
+# a single YACE process has exactly one global scraping interval, so
+# splitting by tier into 3 processes is required, not optional.
+#
+# Deploy this on the regional monitoring server for ONE AWS account/region
+# (per the distributed collection architecture: CloudWatch -> YACE ->
+# local VictoriaMetrics, one stack per account/region). The central
+# FastAPI backend / Grafana then query this VM instance's public endpoint.
+#
+# Before starting:
+#   1. Fetch the 3 tier config files from the FastAPI backend — see
+#      fetch-configs.sh in this directory (or the 3 tier download buttons
+#      in Settings -> Metrics to Monitor in the app).
+#   2. Place them here as: yace-critical.yml, yace-standard.yml, yace-trend.yml
+#   3. Put your AWS credentials file at ./credentials (same-account use)
+#      OR rely on the roleArn/externalId already embedded in each config
+#      (cross-account use — this is what the generator produces when the
+#      account has role_arn set, so usually you don't need step 3 at all).
+#
+# Start:  docker compose up -d
+# Verify: curl http://localhost:8428/api/v1/label/__name__/values | grep aws_
+#         curl http://localhost:5001/metrics | head   # critical YACE
+#         curl http://localhost:5002/metrics | head   # standard YACE
+#         curl http://localhost:5003/metrics | head   # trend YACE
+
+version: "3.9"
+
+services:
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.102.0
+    container_name: vm-monitoring
+    restart: unless-stopped
+    ports:
+      - "8428:8428"        # this is the VM_URL the central FastAPI backend queries
+    command:
+      - "--storageDataPath=/storage"
+      - "--retentionPeriod=3"   # months — tune to your needs
+      - "--httpListenAddr=:8428"
+    volumes:
+      - vm_data:/storage
+
+  yace-critical:
+    image: quay.io/prometheuscommunity/yet-another-cloudwatch-exporter:v0.64.0
+    container_name: yace-critical
+    restart: unless-stopped
+    depends_on:
+      - victoriametrics
+    volumes:
+      - ./yace-critical.yml:/tmp/config.yml:ro
+      - ./credentials:/home/.aws/credentials:ro   # only needed for same-account use
+    command:
+      - "--config.file=/tmp/config.yml"
+      - "--scraping-interval=60"
+    ports:
+      - "5001:5000"
+
+  yace-standard:
+    image: quay.io/prometheuscommunity/yet-another-cloudwatch-exporter:v0.64.0
+    container_name: yace-standard
+    restart: unless-stopped
+    depends_on:
+      - victoriametrics
+    volumes:
+      - ./yace-standard.yml:/tmp/config.yml:ro
+      - ./credentials:/home/.aws/credentials:ro
+    command:
+      - "--config.file=/tmp/config.yml"
+      - "--scraping-interval=300"
+    ports:
+      - "5002:5000"
+
+  yace-trend:
+    image: quay.io/prometheuscommunity/yet-another-cloudwatch-exporter:v0.64.0
+    container_name: yace-trend
+    restart: unless-stopped
+    depends_on:
+      - victoriametrics
+    volumes:
+      - ./yace-trend.yml:/tmp/config.yml:ro
+      - ./credentials:/home/.aws/credentials:ro
+    command:
+      - "--config.file=/tmp/config.yml"
+      - "--scraping-interval=900"
+    ports:
+      - "5003:5000"
+
+  # Scrapes all 3 YACE /metrics endpoints into VictoriaMetrics. VictoriaMetrics
+  # itself only stores what's pushed/scraped into it — it needs to actively
+  # pull from each YACE the same way Prometheus would (vmagent is the
+  # lightweight scraper VictoriaMetrics ships for this).
+  vmagent:
+    image: victoriametrics/vmagent:v1.102.0
+    container_name: vmagent-monitoring
+    restart: unless-stopped
+    depends_on:
+      - victoriametrics
+      - yace-critical
+      - yace-standard
+      - yace-trend
+    volumes:
+      - ./vmagent-scrape.yml:/etc/vmagent/scrape.yml:ro
+      - vmagent_data:/vmagentdata
+    command:
+      - "--promscrape.config=/etc/vmagent/scrape.yml"
+      - "--remoteWrite.url=http://victoriametrics:8428/api/v1/write"
+
+volumes:
+  vm_data:
+  vmagent_data:
