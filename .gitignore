@@ -38,3 +38,6 @@ monitoring_hub_dump.sql
 _backup_20260426_030352/
 _backup_20260426_030452/
 _backup_endpoints_20260426_031023/
+yace-critical.yml
+yace-standard.yml
+yace-trend.yml
