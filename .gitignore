@@ -41,3 +41,8 @@ _backup_endpoints_20260426_031023/
 yace-critical.yml
 yace-standard.yml
 yace-trend.yml
+
+*.bak
+yace-*-final.yml
+yace-*-regenerated.yml
+yace-*-v2.yml

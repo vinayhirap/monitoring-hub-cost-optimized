@@ -210,11 +210,12 @@ def _ebs_raw(region) -> list:
         ec2  = get_session(region).client("ec2")
         vols = ec2.describe_volumes().get("Volumes", [])
 
-        read_ops_map  = vm_query_all("aws_ebs_volume_read_ops_sum",     "dimension_VolumeId")
-        write_ops_map = vm_query_all("aws_ebs_volume_write_ops_sum",    "dimension_VolumeId")
-        read_b_map    = vm_query_all("aws_ebs_volume_read_bytes_sum",   "dimension_VolumeId")
-        write_b_map   = vm_query_all("aws_ebs_volume_write_bytes_sum",  "dimension_VolumeId")
+        read_ops_map  = vm_query_all("aws_ebs_volume_read_ops_average",     "dimension_VolumeId")
+        write_ops_map = vm_query_all("aws_ebs_volume_write_ops_average",    "dimension_VolumeId")
+        read_b_map    = vm_query_all("aws_ebs_volume_read_bytes_average",   "dimension_VolumeId")
+        write_b_map   = vm_query_all("aws_ebs_volume_write_bytes_average",  "dimension_VolumeId")
         queue_map     = vm_query_all("aws_ebs_volume_queue_length_average", "dimension_VolumeId")
+        burst_map     = vm_query_all("aws_ebs_burst_balance_average", "dimension_VolumeId")
 
         out = []
         for v in vols:
@@ -241,6 +242,7 @@ def _ebs_raw(region) -> list:
                 "read_bytes_kb":     round(read_b_map.get(vid,    0.0) / 1024, 2),
                 "write_bytes_kb":    round(write_b_map.get(vid,   0.0) / 1024, 2),
                 "queue_length":      round(queue_map.get(vid,     0.0), 4),
+                "burst_balance":     round(burst_map.get(vid, 0.0), 2),
             })
         return out
     except Exception as e:
@@ -572,18 +574,19 @@ def _get_ebs_metric_series(volume_id, region=None, hours=6) -> dict:
             )
         return {
             "volume_id":    volume_id,
-            "read_ops":     s("aws_ebs_volume_read_ops_sum"),
-            "write_ops":    s("aws_ebs_volume_write_ops_sum"),
-            "read_bytes":   s("aws_ebs_volume_read_bytes_sum"),
-            "write_bytes":  s("aws_ebs_volume_write_bytes_sum"),
+            "read_ops":     s("aws_ebs_volume_read_ops_average"),
+            "write_ops":    s("aws_ebs_volume_write_ops_average"),
+            "read_bytes":   s("aws_ebs_volume_read_bytes_average"),
+            "write_bytes":  s("aws_ebs_volume_write_bytes_average"),
             "queue_length": s("aws_ebs_volume_queue_length_average"),
+            "burst_balance": s("aws_ebs_burst_balance_average"),
             "period_hours": hours,
             "period_secs":  period,
         }
     except Exception as e:
         logger.warning(f"EBS series [{volume_id}]: {e}")
         return {"volume_id": volume_id, "read_ops": [], "write_ops": [],
-                "read_bytes": [], "write_bytes": [], "queue_length": []}
+                "read_bytes": [], "write_bytes": [], "queue_length": [], "burst_balance": []}
 
 
 # ── Metric series — Lambda (SPLIT: VM once deployed, boto3 fallback) ─────

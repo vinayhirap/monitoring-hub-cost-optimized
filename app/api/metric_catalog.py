@@ -393,13 +393,22 @@ def generate_yace_config(
             raise HTTPException(status_code=400, detail=f"No enabled metrics fall in the '{tier}' tier for this account.")
 
     # Group into one discovery job per (namespace, interval) — this is the fix.
+    # Globally-scoped services: their Resource Groups Tagging API index only
+    # exists in us-east-1, regardless of the account's default_region. Using
+    # the account's regional default here causes YACE to query the wrong
+    # region's tagging index and silently discover zero resources even when
+    # they ARE tagged. Confirmed with AWS/CloudFront this session.
+    GLOBAL_NAMESPACES = {"AWS/CloudFront", "AWS/Route53"}
+
     jobs_by_key = {}
     for r in rows:
         interval = r["default_interval"] or 300
         key = (r["namespace"], interval)
+        job_region = "us-east-1" if r["namespace"] in GLOBAL_NAMESPACES \
+            else (account["default_region"] or "us-east-1")
         job = jobs_by_key.setdefault(key, {
             "type": r["namespace"],
-            "regions": [account["default_region"] or "us-east-1"],
+            "regions": [job_region],
             "period": interval,
             "length": interval,
             "metrics": [],
