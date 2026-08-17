@@ -40,10 +40,18 @@ logger = logging.getLogger(__name__)
 _cache: dict = {}
 _CACHE_TTL   = 60
 
+# Stopgap cache for Lambda metric-series boto3 fallback (see Mumbai GMD
+# cost audit, Aug 2026): VM has no aws_lambda_* series yet, so every
+# _get_lambda_metric_series() call falls through to a real, uncached
+# boto3 GetMetricData batch. 5 min balances chart freshness against
+# cost until YACE is actually scraping Lambda for this account.
+_LAMBDA_SERIES_CACHE_TTL = 300
 
-def _cached(key: str, fn):
+
+def _cached(key: str, fn, ttl: int = None):
+    ttl = _CACHE_TTL if ttl is None else ttl
     now = time.time()
-    if key in _cache and now - _cache[key]["ts"] < _CACHE_TTL:
+    if key in _cache and now - _cache[key]["ts"] < ttl:
         return _cache[key]["data"]
     result = fn()
     _cache[key] = {"data": result, "ts": now}
@@ -600,6 +608,14 @@ def _get_ebs_metric_series(volume_id, region=None, hours=6) -> dict:
 # after first deploy. Falls back to boto3 automatically if VM has nothing.
 
 def _get_lambda_metric_series(function_name, region=None, hours=6) -> dict:
+    return _cached(
+        f"lambda_series_{function_name}_{region}_{hours}",
+        lambda: _get_lambda_metric_series_raw(function_name, region, hours),
+        ttl=_LAMBDA_SERIES_CACHE_TTL,
+    )
+
+
+def _get_lambda_metric_series_raw(function_name, region=None, hours=6) -> dict:
     try:
         end    = datetime.now(timezone.utc)
         start  = end - timedelta(hours=hours)
@@ -877,12 +893,19 @@ def check_and_write_alerts(account_id: int, region: str, thresholds: list) -> li
     ebs_volumes   = collect_ebs_volumes(region)
     rds_instances = collect_rds_instances(region)
     lambda_funcs  = collect_lambda_functions(region)
+    elb_list      = collect_elb(region)   # NEW — needed to route ALB thresholds to VM
+
+    def _lb_dim(lb):
+        """YACE/CloudWatch dimension value is the ARN suffix after 'loadbalancer/', not the LB name."""
+        arn = lb.get("load_balancer_arn", "")
+        return arn.split("loadbalancer/")[-1] if "loadbalancer/" in arn else lb.get("name", "")
 
     SERVICE_RESOURCES = {
         "ec2":    [(i["instance_id"], [{"Name": "InstanceId",           "Value": i["instance_id"]}]) for i in ec2_instances if i["state"] == "running"],
         "ebs":    [(v["volume_id"],   [{"Name": "VolumeId",             "Value": v["volume_id"]}])   for v in ebs_volumes   if v["state"] == "in-use"],
         "rds":    [(d["db_instance_id"], [{"Name": "DBInstanceIdentifier","Value": d["db_instance_id"]}]) for d in rds_instances],
         "lambda": [(f["function_name"],  [{"Name": "FunctionName",      "Value": f["function_name"]}])    for f in lambda_funcs],
+        "alb":    [(lb["name"],          [{"Name": "LoadBalancer",      "Value": _lb_dim(lb)}])            for lb in elb_list],  # NEW
     }
     NAMESPACE_MAP = {
         "ec2": "AWS/EC2", "ebs": "AWS/EBS",
@@ -895,26 +918,42 @@ def check_and_write_alerts(account_id: int, region: str, thresholds: list) -> li
         "ec2": "dimension_InstanceId",
         "ebs": "dimension_VolumeId",
         "rds": "dimension_DBInstanceIdentifier",
+        "alb": "dimension_LoadBalancer",   # NEW
     }
     # Explicit map, NOT a generic snake_case conversion — YACE special-cases
     # acronyms (CPUUtilization -> cpuutilization, not c_p_u_utilization).
     # Extend this table if you threshold on new metrics that YACE scrapes.
     VM_METRIC_STUB = {
         ("ec2", "CPUUtilization"):      "aws_ec2_cpuutilization",
+        ("ec2", "NetworkIn"):           "aws_ec2_network_in",       # confirmed live in VM -- Aug 2026
+        ("ec2", "NetworkOut"):          "aws_ec2_network_out",      # confirmed live in VM -- Aug 2026
         # Free Describe-API path (fix #4, app/aws/describe_polling.py) —
         # NOT CloudWatch/YACE. Sub-second-fresh, zero GetMetricData cost,
         # replaces the old aws_ec2_status_check_failed (YACE/CloudWatch) stub.
         ("ec2", "StatusCheckFailed"):   "aws_ec2_status_check_failed_describe",
+
         ("ebs", "VolumeQueueLength"):   "aws_ebs_volume_queue_length",
         ("ebs", "BurstBalance"):        "aws_ebs_burst_balance",
+        ("ebs", "VolumeReadOps"):       "aws_ebs_volume_read_ops",      # NEW — confirmed live in VM
+        ("ebs", "VolumeWriteOps"):      "aws_ebs_volume_write_ops",     # NEW — confirmed live in VM
+        ("ebs", "VolumeReadBytes"):     "aws_ebs_volume_read_bytes",    # NEW — confirmed live in VM
+        ("ebs", "VolumeWriteBytes"):    "aws_ebs_volume_write_bytes",   # NEW — confirmed live in VM
+
         ("rds", "CPUUtilization"):      "aws_rds_cpuutilization",
         ("rds", "FreeStorageSpace"):    "aws_rds_free_storage_space",
+
+        # NEW — all 6 confirmed present in VM's __name__ label list
+        ("alb", "RequestCount"):              "aws_applicationelb_request_count",
+        ("alb", "HTTPCode_Target_5XX_Count"): "aws_applicationelb_httpcode_target_5_xx_count",
+        ("alb", "HTTPCode_Target_4XX_Count"): "aws_applicationelb_httpcode_target_4_xx_count",
+        ("alb", "TargetResponseTime"):        "aws_applicationelb_target_response_time",
+        ("alb", "HealthyHostCount"):          "aws_applicationelb_healthy_host_count",
+        ("alb", "UnHealthyHostCount"):        "aws_applicationelb_un_healthy_host_count",
     }
     # Metrics pushed directly by describe_polling.py are raw gauges (no
     # Average/Sum/Maximum suffix) — skip the generic stat-suffix step for them.
     VM_NO_SUFFIX = {"aws_ec2_status_check_failed_describe"}
     STAT_SUFFIX = {"Average": "average", "Sum": "sum", "Maximum": "maximum"}
-
     vm_lookups  = []   # (t_idx, resource_id, promql)
     gmd_queries = []
     qid_map     = {}

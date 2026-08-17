@@ -1,0 +1,390 @@
+# YACE discovery config — generated for account 'AuroGov Mumbai' (924922671984), region ap-south-1
+# Tier: standard — run this YACE instance with --scraping-interval=300
+# Deploy this to the regional monitoring server for that account/region
+# (CloudWatch -> YACE -> local VictoriaMetrics) and reload YACE.
+# Regenerate any time the metric selection changes in Settings -> Metrics.
+
+apiVersion: v1alpha1
+discovery:
+  jobs:
+  - type: AWS/ApiGateway
+    regions:
+    - ap-south-1
+    period: 300
+    length: 300
+    metrics:
+    - name: 4XXError
+      statistics:
+      - Sum
+    - name: 5XXError
+      statistics:
+      - Sum
+    - name: Count
+      statistics:
+      - Sum
+    - name: Latency
+      statistics:
+      - Average
+  - type: AWS/AutoScaling
+    regions:
+    - ap-south-1
+    period: 300
+    length: 300
+    metrics:
+    - name: GroupInServiceInstances
+      statistics:
+      - Average
+  - type: AWS/Backup
+    regions:
+    - ap-south-1
+    period: 300
+    length: 300
+    metrics:
+    - name: NumberOfBackupJobsFailed
+      statistics:
+      - Sum
+    - name: NumberOfRestoreJobsFailed
+      statistics:
+      - Sum
+  - type: AWS/CertificateManager
+    regions:
+    - ap-south-1
+    period: 300
+    length: 300
+    metrics:
+    - name: DaysToExpiry
+      statistics:
+      - Minimum
+  - type: AWS/CloudFront
+    regions:
+    - us-east-1
+    period: 300
+    length: 300
+    metrics:
+    - name: 4xxErrorRate
+      statistics:
+      - Average
+    - name: 5xxErrorRate
+      statistics:
+      - Average
+    - name: Requests
+      statistics:
+      - Sum
+  - type: AWS/Cognito
+    regions:
+    - ap-south-1
+    period: 300
+    length: 300
+    metrics:
+    - name: ThrottledEvents
+      statistics:
+      - Sum
+  - type: AWS/DMS
+    regions:
+    - ap-south-1
+    period: 300
+    length: 300
+    metrics:
+    - name: CDCLatencySource
+      statistics:
+      - Average
+    - name: CDCLatencyTarget
+      statistics:
+      - Average
+  - type: AWS/DocDB
+    regions:
+    - ap-south-1
+    period: 300
+    length: 300
+    metrics:
+    - name: CPUUtilization
+      statistics:
+      - Average
+    - name: DatabaseConnections
+      statistics:
+      - Average
+    - name: FreeableMemory
+      statistics:
+      - Average
+  - type: AWS/DX
+    regions:
+    - ap-south-1
+    period: 300
+    length: 300
+    metrics:
+    - name: ConnectionErrorCount
+      statistics:
+      - Sum
+  - type: AWS/DynamoDB
+    regions:
+    - ap-south-1
+    period: 300
+    length: 300
+    metrics:
+    - name: ConsumedReadCapacityUnits
+      statistics:
+      - Sum
+    - name: ConsumedWriteCapacityUnits
+      statistics:
+      - Sum
+    - name: ThrottledRequests
+      statistics:
+      - Sum
+  - type: AWS/EFS
+    regions:
+    - ap-south-1
+    period: 300
+    length: 300
+    metrics:
+    - name: BurstCreditBalance
+      statistics:
+      - Average
+    - name: PercentIOLimit
+      statistics:
+      - Average
+  - type: AWS/EKS
+    regions:
+    - ap-south-1
+    period: 300
+    length: 300
+    metrics:
+    - name: cluster_failed_node_count
+      statistics:
+      - Average
+  - type: AWS/ElastiCache
+    regions:
+    - ap-south-1
+    period: 300
+    length: 300
+    metrics:
+    - name: CPUUtilization
+      statistics:
+      - Average
+    - name: CurrConnections
+      statistics:
+      - Average
+    - name: DatabaseMemoryUsagePercentage
+      statistics:
+      - Average
+    - name: Evictions
+      statistics:
+      - Sum
+  - type: AWS/ES
+    regions:
+    - ap-south-1
+    period: 300
+    length: 300
+    metrics:
+    - name: ClusterIndexWritesBlocked
+      statistics:
+      - Maximum
+    - name: ClusterStatus.red
+      statistics:
+      - Maximum
+    - name: ClusterStatus.yellow
+      statistics:
+      - Maximum
+    - name: CPUUtilization
+      statistics:
+      - Average
+    - name: FreeStorageSpace
+      statistics:
+      - Minimum
+    - name: JVMMemoryPressure
+      statistics:
+      - Average
+  - type: AWS/Events
+    regions:
+    - ap-south-1
+    period: 300
+    length: 300
+    metrics:
+    - name: FailedInvocations
+      statistics:
+      - Sum
+    - name: Invocations
+      statistics:
+      - Sum
+  - type: AWS/Firehose
+    regions:
+    - ap-south-1
+    period: 300
+    length: 300
+    metrics:
+    - name: DeliveryToS3.Success
+      statistics:
+      - Average
+  - type: AWS/Kafka
+    regions:
+    - ap-south-1
+    period: 300
+    length: 300
+    metrics:
+    - name: CpuUser
+      statistics:
+      - Average
+    - name: KafkaDataLogsDiskUsed
+      statistics:
+      - Average
+    - name: OfflinePartitionsCount
+      statistics:
+      - Sum
+    - name: UnderReplicatedPartitions
+      statistics:
+      - Sum
+  - type: AWS/Kinesis
+    regions:
+    - ap-south-1
+    period: 300
+    length: 300
+    metrics:
+    - name: IncomingBytes
+      statistics:
+      - Sum
+    - name: IncomingRecords
+      statistics:
+      - Sum
+    - name: ReadProvisionedThroughputExceeded
+      statistics:
+      - Sum
+    - name: WriteProvisionedThroughputExceeded
+      statistics:
+      - Sum
+  - type: AWS/Logs
+    regions:
+    - ap-south-1
+    period: 300
+    length: 300
+    metrics:
+    - name: DeliveryErrors
+      statistics:
+      - Sum
+  - type: AWS/MemoryDB
+    regions:
+    - ap-south-1
+    period: 300
+    length: 300
+    metrics:
+    - name: CPUUtilization
+      statistics:
+      - Average
+    - name: DatabaseMemoryUsagePercentage
+      statistics:
+      - Average
+    - name: Evictions
+      statistics:
+      - Sum
+  - type: AWS/NATGateway
+    regions:
+    - ap-south-1
+    period: 300
+    length: 300
+    metrics:
+    - name: BytesInFromSource
+      statistics:
+      - Sum
+    - name: BytesOutToDestination
+      statistics:
+      - Sum
+    - name: ErrorPortAllocation
+      statistics:
+      - Sum
+  - type: AWS/Neptune
+    regions:
+    - ap-south-1
+    period: 300
+    length: 300
+    metrics:
+    - name: CPUUtilization
+      statistics:
+      - Average
+  - type: AWS/NetworkELB
+    regions:
+    - ap-south-1
+    period: 300
+    length: 300
+    metrics:
+    - name: HealthyHostCount
+      statistics:
+      - Average
+    - name: UnHealthyHostCount
+      statistics:
+      - Average
+  - type: AWS/Redshift
+    regions:
+    - ap-south-1
+    period: 300
+    length: 300
+    metrics:
+    - name: CPUUtilization
+      statistics:
+      - Average
+    - name: DatabaseConnections
+      statistics:
+      - Average
+    - name: PercentageDiskSpaceUsed
+      statistics:
+      - Average
+  - type: AWS/SNS
+    regions:
+    - ap-south-1
+    period: 300
+    length: 300
+    metrics:
+    - name: NumberOfMessagesPublished
+      statistics:
+      - Sum
+    - name: NumberOfNotificationsFailed
+      statistics:
+      - Sum
+  - type: AWS/SQS
+    regions:
+    - ap-south-1
+    period: 300
+    length: 300
+    metrics:
+    - name: ApproximateAgeOfOldestMessage
+      statistics:
+      - Maximum
+    - name: ApproximateNumberOfMessagesVisible
+      statistics:
+      - Average
+  - type: AWS/States
+    regions:
+    - ap-south-1
+    period: 300
+    length: 300
+    metrics:
+    - name: ExecutionsFailed
+      statistics:
+      - Sum
+    - name: ExecutionsTimedOut
+      statistics:
+      - Sum
+  - type: AWS/TransitGateway
+    regions:
+    - ap-south-1
+    period: 300
+    length: 300
+    metrics:
+    - name: BytesIn
+      statistics:
+      - Sum
+    - name: BytesOut
+      statistics:
+      - Sum
+    - name: PacketDropCountBlackhole
+      statistics:
+      - Sum
+    - name: PacketDropCountNoRoute
+      statistics:
+      - Sum
+  - type: AWS/WAFV2
+    regions:
+    - ap-south-1
+    period: 300
+    length: 300
+    metrics:
+    - name: BlockedRequests
+      statistics:
+      - Sum

@@ -1,0 +1,153 @@
+# YACE discovery config — generated for account 'AuroGov Mumbai' (924922671984), region ap-south-1
+# Tier: critical — run this YACE instance with --scraping-interval=60
+# Deploy this to the regional monitoring server for that account/region
+# (CloudWatch -> YACE -> local VictoriaMetrics) and reload YACE.
+# Regenerate any time the metric selection changes in Settings -> Metrics.
+
+apiVersion: v1alpha1
+discovery:
+  jobs:
+  - type: AWS/ApplicationELB
+    regions:
+    - ap-south-1
+    period: 60
+    length: 60
+    metrics:
+    - name: HealthyHostCount
+      statistics:
+      - Average
+    - name: HTTPCode_Target_4XX_Count
+      statistics:
+      - Sum
+    - name: HTTPCode_Target_5XX_Count
+      statistics:
+      - Sum
+    - name: RequestCount
+      statistics:
+      - Sum
+    - name: TargetResponseTime
+      statistics:
+      - Average
+    - name: UnHealthyHostCount
+      statistics:
+      - Average
+  - type: AWS/DX
+    regions:
+    - ap-south-1
+    period: 60
+    length: 60
+    metrics:
+    - name: ConnectionState
+      statistics:
+      - Maximum
+  - type: AWS/EBS
+    regions:
+    - ap-south-1
+    period: 60
+    length: 60
+    metrics:
+    - name: BurstBalance
+      statistics:
+      - Average
+    - name: VolumeQueueLength
+      statistics:
+      - Average
+    - name: VolumeReadBytes
+      statistics:
+      - Average
+    - name: VolumeReadOps
+      statistics:
+      - Average
+    - name: VolumeWriteBytes
+      statistics:
+      - Average
+    - name: VolumeWriteOps
+      statistics:
+      - Average
+  - type: AWS/EC2
+    regions:
+    - ap-south-1
+    period: 60
+    length: 60
+    metrics:
+    - name: CPUUtilization
+      statistics:
+      - Average
+  - type: AWS/ECS
+    regions:
+    - ap-south-1
+    period: 60
+    length: 60
+    metrics:
+    - name: CPUUtilization
+      statistics:
+      - Average
+    - name: MemoryUtilization
+      statistics:
+      - Average
+  - type: AWS/Lambda
+    regions:
+    - ap-south-1
+    period: 60
+    length: 60
+    metrics:
+    - name: Duration
+      statistics:
+      - Average
+    - name: Errors
+      statistics:
+      - Sum
+    - name: Invocations
+      statistics:
+      - Sum
+    - name: Throttles
+      statistics:
+      - Sum
+  - type: AWS/RDS
+    regions:
+    - ap-south-1
+    period: 60
+    length: 60
+    metrics:
+    - name: CPUUtilization
+      statistics:
+      - Average
+    - name: DatabaseConnections
+      statistics:
+      - Average
+    - name: FreeableMemory
+      statistics:
+      - Average
+    - name: FreeStorageSpace
+      statistics:
+      - Average
+    - name: ReadIOPS
+      statistics:
+      - Average
+    - name: ReadLatency
+      statistics:
+      - Average
+    - name: WriteIOPS
+      statistics:
+      - Average
+    - name: WriteLatency
+      statistics:
+      - Average
+  - type: AWS/Route53
+    regions:
+    - us-east-1
+    period: 60
+    length: 60
+    metrics:
+    - name: HealthCheckStatus
+      statistics:
+      - Minimum
+  - type: AWS/VPN
+    regions:
+    - ap-south-1
+    period: 60
+    length: 60
+    metrics:
+    - name: TunnelState
+      statistics:
+      - Maximum

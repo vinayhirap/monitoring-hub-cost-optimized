@@ -94,6 +94,7 @@ def run_once(tier="standard"):
     """Single collection + alert cycle for given tier."""
     from app.collector.metrics.runner  import run_metrics_collection
     from app.collector.alert_evaluator import evaluate_alerts
+    from app.collector.metrics_vm_sync   import sync_metrics_from_vm
 
     accounts = _get_active_accounts()
     if not accounts:
@@ -107,6 +108,7 @@ def run_once(tier="standard"):
 
     # Evaluate alerts after every standard cycle
     if tier == "standard":
+        sync_metrics_from_vm()
         evaluate_alerts()
         
 

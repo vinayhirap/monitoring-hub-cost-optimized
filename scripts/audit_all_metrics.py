@@ -44,10 +44,28 @@ STAT_SUFFIXES = ["average", "sum", "maximum", "minimum", "samplecount",
                  "p50", "p90", "p95", "p99", "describe"]
 
 
+# Region per logical account -- only way to scope YACE-sourced series,
+# since YACE tags the real AWS account id (same for all three logical
+# accounts) not the app's logical account id. See handoff notes.
+ACCOUNT_REGION = {4: "ap-south-2", 5: "ap-south-1", 6: "us-east-1"}
+
+
 def normalize(s: str) -> str:
     s = s.lower()
     s = re.sub(r"[^a-z0-9]", "", s)
     return s
+
+
+def _scoped_query(vm_name: str, account_id: int) -> str:
+    """Add an account-scoping label filter. describe-sourced series carry
+    dimension_AccountId = app's logical account id; YACE-sourced series only
+    carry region, and only account 5 (ap-south-1) has any real deployment."""
+    if vm_name.endswith("_describe"):
+        return f'{vm_name}{{dimension_AccountId="{account_id}"}}'
+    region = ACCOUNT_REGION.get(account_id)
+    if region:
+        return f'{vm_name}{{region="{region}"}}'
+    return vm_name
 
 
 def strip_stat_suffix(vm_name: str) -> str:
@@ -158,7 +176,7 @@ def main():
             try:
                 q_resp = requests.get(
                     f"{vm_base}/api/v1/query",
-                    params={"query": matches[0]},
+                    params={"query": _scoped_query(matches[0], account_id)},
                     timeout=15,
                 )
                 q_resp.raise_for_status()
@@ -173,7 +191,7 @@ def main():
                 pass
 
         rows_out.append({
-            "namespace": ns, "metric": mname, "tier": tier, "enabled": enabled,
+            "namespace": ns, "metric": mname, "tier": tier, "enabled": enabled, "vm_series": (matches[0] if matches else None),
             "wired": wired, "live": live, "series": series_count,
             "latency_s": latency_s, "latest": latest_val,
         })
@@ -186,6 +204,9 @@ def main():
     wired_not_live = [r for r in rows_out if r["enabled"] and r["wired"] and not r["live"]]
     enabled_not_wired = [r for r in rows_out if r["enabled"] and not r["wired"]]
     wired_no_enable = [r for r in rows_out if r["wired"] and not r["enabled"]]
+    live_not_enabled = [r for r in rows_out if r["live"] and not r["enabled"]]
+    describe_sourced = [r for r in live_not_enabled if str(r.get("vm_series") or "").endswith("_describe")]
+    live_not_enabled_other = [r for r in live_not_enabled if r not in describe_sourced]
 
     print("\n=== SUMMARY ===")
     print(f"Total real metrics in catalog: {len(rows_out)}")
@@ -211,6 +232,16 @@ def main():
             by_tier.setdefault(r["tier"], []).append(f"{r['namespace']}/{r['metric']}")
         for tier, items in by_tier.items():
             print(f"  [{tier}] ({len(items)}): {', '.join(items)}")
+
+    if describe_sourced:
+        print(f"\nLive via free describe-polling (expected, not a bug): {len(describe_sourced)}")
+        for r in describe_sourced:
+            print(f"  {r.get('metric')} (namespace={r.get('namespace', '?')})")
+
+    if live_not_enabled_other:
+        print(f"\nANOMALY - live but not enabled, not describe-sourced: {len(live_not_enabled_other)}")
+        for r in live_not_enabled_other:
+            print(f"  {r.get('metric')} (namespace={r.get('namespace', '?')})")
 
     print("\nCAVEAT: 'wired' reflects what the DB would generate right NOW via the API, "
           "not necessarily what's physically deployed in /etc/yace/config-<tier>.yml on "

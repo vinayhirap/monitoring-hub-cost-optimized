@@ -21,6 +21,7 @@ from app.api.metric_catalog import router as metric_catalog_router
 from app.ws.manager import ws_manager
 from app.ws.pusher  import redis_listener
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 logger = logging.getLogger(__name__)
 
 

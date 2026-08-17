@@ -1,0 +1,21 @@
+# YACE discovery config — generated for account 'AuroGov Mumbai' (924922671984), region ap-south-1
+# Tier: trend — run this YACE instance with --scraping-interval=900
+# Deploy this to the regional monitoring server for that account/region
+# (CloudWatch -> YACE -> local VictoriaMetrics) and reload YACE.
+# Regenerate any time the metric selection changes in Settings -> Metrics.
+
+apiVersion: v1alpha1
+discovery:
+  jobs:
+  - type: AWS/S3
+    regions:
+    - ap-south-1
+    period: 900
+    length: 900
+    metrics:
+    - name: BucketSizeBytes
+      statistics:
+      - Average
+    - name: NumberOfObjects
+      statistics:
+      - Average
