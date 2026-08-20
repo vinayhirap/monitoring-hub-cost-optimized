@@ -26,6 +26,8 @@ Requires DB_HOST / DB_PORT / DB_USER / DB_PASSWORD / DB_NAME env vars
 defaults used there.
 """
 import os
+from dotenv import load_dotenv
+load_dotenv()
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

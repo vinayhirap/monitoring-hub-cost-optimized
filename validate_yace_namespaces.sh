@@ -12,7 +12,7 @@
 # Usage:
 #   ./validate_yace_namespaces.sh AWS/ApiGateway AWS/AutoScaling AWS/DAX ...
 #
-# Run this on the YACE server (13.127.154.112), not locally - it needs
+# Run this on the YACE server (3.109.181.40), not locally - it needs
 # the actual yace binary at /usr/local/bin/yace.
 
 BIN=/usr/local/bin/yace

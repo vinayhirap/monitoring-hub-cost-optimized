@@ -3,7 +3,7 @@
 disable_unsupported_metrics_v2.py
 
 Uses the DEFINITIVE list of 76 namespaces confirmed rejected by the actual
-installed YACE 0.67.0 binary on 13.127.154.112 (via find_unsupported_namespaces.py,
+installed YACE 0.67.0 binary on 3.109.181.40 (via find_unsupported_namespaces.py,
 which probed the real binary directly - not README, not source, not
 binary-string-guessing). 90 other namespaces were confirmed genuinely supported,
 including AWS/EKS, which an earlier README-based guess had wrongly flagged as

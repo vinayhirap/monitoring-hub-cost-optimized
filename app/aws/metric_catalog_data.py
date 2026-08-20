@@ -30,8 +30,8 @@ CURATED = {
     # ── Core (already collected today) ───────────────────────────
     "ec2": ("Amazon EC2", "AWS/EC2", "core", [
         ("CPUUtilization",     "Percent", "Average", True,  "% CPU used"),
-        ("NetworkIn",          "Bytes",   "Sum",     True,  "Inbound network traffic"),
-        ("NetworkOut",         "Bytes",   "Sum",     True,  "Outbound network traffic"),
+        ("NetworkIn",          "Bytes",   "Average", True,  "Inbound network traffic"),
+        ("NetworkOut",         "Bytes",   "Average", True,  "Outbound network traffic"),
         ("DiskReadBytes",      "Bytes",   "Sum",     False, "Instance-store disk reads"),
         ("DiskWriteBytes",     "Bytes",   "Sum",     False, "Instance-store disk writes"),
         ("StatusCheckFailed",  "Count",   "Maximum", True,  "Combined instance+system health check"),

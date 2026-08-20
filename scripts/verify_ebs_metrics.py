@@ -12,7 +12,7 @@ read_bytes/write_bytes exist at all (per the label-values output, they
 currently do not - this script will show that plainly).
 
 Usage:
-    python verify_ebs_metrics.py http://13.127.154.112 [hours]
+    python verify_ebs_metrics.py http://3.109.181.40 [hours]
 
     hours defaults to 6.
 """

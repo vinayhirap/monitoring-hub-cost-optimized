@@ -27,7 +27,7 @@ Usage:
     python audit_all_metrics.py [account_id] [vm_base_url]
 
     account_id defaults to 5 (AuroGov Mumbai)
-    vm_base_url defaults to http://13.127.154.112
+    vm_base_url defaults to http://3.109.181.40
 """
 import sys
 import re
@@ -82,7 +82,7 @@ def strip_stat_suffix(vm_name: str) -> str:
 
 def main():
     account_id = int(sys.argv[1]) if len(sys.argv) > 1 else 5
-    vm_base = sys.argv[2] if len(sys.argv) > 2 else "http://13.127.154.112"
+    vm_base = sys.argv[2] if len(sys.argv) > 2 else "http://3.109.181.40"
 
     conn = get_connection()
     cur = conn.cursor(dictionary=True)
