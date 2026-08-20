@@ -29,7 +29,7 @@ const INVERTED_WARN = new Set(["HealthyHostCount", "BurstBalance", "FreeStorageS
 const ONE_BOUNDARY  = new Set(["HealthyHostCount", "StatusCheckFailed"]);
 
 const SVC_ICON  = { ec2:"🖥", ebs:"💾", alb:"⚖", rds:"🗄", lambda:"λ", s3:"🪣" };
-const SVC_COLOR = { ec2:"#00c7ff", ebs:"#38bdf8", alb:"#f472b6", rds:"#a78bfa", lambda:"#00e5a0", s3:"#fbbf24" };
+const SVC_COLOR = { ec2:"#2bb3ac", ebs:"#38bdf8", alb:"#f472b6", rds:"#7c6ee0", lambda:"#22c55e", s3:"#fbbf24" };
 
 export default function Settings() {
   const [accounts,    setAccounts]    = useState([]);
@@ -337,8 +337,8 @@ export default function Settings() {
           <div style={{
             margin: "12px 20px",
             padding: "12px 16px",
-            background: (checkResult.breaches?.length > 0) ? "rgba(255,77,109,0.06)" : "rgba(0,229,160,0.06)",
-            border: `1px solid ${(checkResult.breaches?.length > 0) ? "rgba(255,77,109,0.2)" : "rgba(0,229,160,0.2)"}`,
+            background: (checkResult.breaches?.length > 0) ? "rgba(239,68,68,0.06)" : "rgba(34,197,94,0.06)",
+            border: `1px solid ${(checkResult.breaches?.length > 0) ? "rgba(239,68,68,0.2)" : "rgba(34,197,94,0.2)"}`,
             borderRadius: 8,
             fontSize: 13,
           }}>
@@ -485,7 +485,7 @@ export default function Settings() {
 
 function ServiceThresholdSection({ svc, items, onToggle, onUpdate, onSave, saving, saveMsg }) {
   const icon  = SVC_ICON[svc]  || "📊";
-  const color = SVC_COLOR[svc] || "#00c7ff";
+  const color = SVC_COLOR[svc] || "#2bb3ac";
   return (
     <div style={{ borderTop: "1px solid var(--border)" }}>
       <div style={{ padding: "10px 22px", background: "var(--bg-base)", display: "flex", alignItems: "center", gap: 8, borderBottom: "1px solid var(--border)" }}>
@@ -552,7 +552,7 @@ function ThresholdItem({ t, onToggle, onUpdate, onSave, saving, savedState }) {
         <div className="thresh-input-row">
           <span style={{ fontSize: 10, color: "var(--green)", width: 16 }}>✓</span>
           <span className="thresh-hint">Healthy</span>
-          <span style={{ fontFamily:"var(--font-mono)", fontSize:12, color:"var(--green)", padding:"2px 6px", background:"rgba(0,229,160,0.08)", borderRadius:4 }}>
+          <span style={{ fontFamily:"var(--font-mono)", fontSize:12, color:"var(--green)", padding:"2px 6px", background:"rgba(34,197,94,0.08)", borderRadius:4 }}>
             {isBinary ? "0" : isInverted ? `> ${ideal.warn ?? "—"}${ideal.unit ?? ""}` : `< ${ideal.warn ?? "—"}${ideal.unit ?? ""}`}
           </span>
           {ideal.warn != null && !isBinary && (
@@ -603,9 +603,9 @@ function ThresholdItem({ t, onToggle, onUpdate, onSave, saving, savedState }) {
         className="btn-save"
         style={{
           marginTop: 10, width: "100%", fontSize: 12, padding: "6px",
-          background: savedState === "ok" ? "rgba(0,229,160,0.15)" : savedState === "err" ? "rgba(255,77,109,0.15)" : undefined,
-          borderColor: savedState === "ok" ? "#00e5a0" : savedState === "err" ? "#ff4d6d" : undefined,
-          color: savedState === "ok" ? "#00e5a0" : savedState === "err" ? "#ff4d6d" : undefined,
+          background: savedState === "ok" ? "rgba(34,197,94,0.15)" : savedState === "err" ? "rgba(239,68,68,0.15)" : undefined,
+          borderColor: savedState === "ok" ? "#22c55e" : savedState === "err" ? "#ef4444" : undefined,
+          color: savedState === "ok" ? "#22c55e" : savedState === "err" ? "#ef4444" : undefined,
         }}
         onClick={onSave}
         disabled={saving || !t.enabled}

@@ -139,8 +139,8 @@ export default function Overview() {
     <div className={`overview ${isNOC ? "noc-fullscreen" : ""}`}>
       <div className="ov-header">
         <div>
-          <h1 style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-0.02em" }}>
-            ASLOps Dashboard <span className="hl">Overview</span>
+          <h1 style={{ fontSize: "var(--fs-page-title)", fontWeight: 700, letterSpacing: "-0.01em" }}>
+            Infrastructure <span className="hl">Overview</span>
           </h1>
           <p style={{ color: "var(--text-muted)", fontSize: 14, marginTop: 4 }}>
             Live AWS infrastructure monitoring across all accounts · NOC View
@@ -163,10 +163,10 @@ export default function Overview() {
       </div>
 
       <div className="ov-summary">
-        <SummaryTile icon="🏢" label="Total Accounts" value={grouped.length} />
-        <SummaryTile icon="✅" label="Healthy"  value={healthyCount}  color="green" />
-        <SummaryTile icon="⚠️" label="Warning"  value={warningCount}  color={warningCount  > 0 ? "yellow" : "default"} pulse={warningCount  > 0} />
-        <SummaryTile icon="🔴" label="Critical" value={criticalCount} color={criticalCount > 0 ? "red"    : "default"} pulse={criticalCount > 0} />
+        <SummaryTile icon={<IconAccounts />} label="Total Accounts" value={grouped.length} />
+        <SummaryTile icon={<IconHealthy />}  label="Healthy"  value={healthyCount}  color="green" />
+        <SummaryTile icon={<IconWarning />}  label="Warning"  value={warningCount}  color={warningCount  > 0 ? "yellow" : "default"} pulse={warningCount  > 0} />
+        <SummaryTile icon={<IconCritical />} label="Critical" value={criticalCount} color={criticalCount > 0 ? "red"    : "default"} pulse={criticalCount > 0} />
       </div>
 
       {(criticalAlerts > 0 || warningAlerts > 0) && (
@@ -305,12 +305,12 @@ function AccountGroupCard({ group, alerts, expanded, onToggle, onRegionClick, on
         {(acctCritical > 0 || acctWarning > 0) && (
           <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
             {acctCritical > 0 && (
-              <span style={{ fontSize: 10, color: "#ff4d6d", background: "rgba(255,77,109,0.1)", border: "1px solid rgba(255,77,109,0.2)", borderRadius: 4, padding: "1px 6px" }}>
-                🔴 {acctCritical} critical
+              <span style={{ fontSize: 10, color: "#ef4444", background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 4, padding: "1px 6px" }}>
+                ● {acctCritical} critical
               </span>
             )}
             {acctWarning > 0 && (
-              <span style={{ fontSize: 10, color: "#ffc940", background: "rgba(255,201,64,0.1)", border: "1px solid rgba(255,201,64,0.2)", borderRadius: 4, padding: "1px 6px" }}>
+              <span style={{ fontSize: 10, color: "#f59e0b", background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.2)", borderRadius: 4, padding: "1px 6px" }}>
                 ⚠ {acctWarning} warning
               </span>
             )}
@@ -386,7 +386,7 @@ function RegionRow({ regionRow, alerts, onClick, onDelete }) {
     critical: "region-row-critical",
   }[status] || "region-row-healthy";
 
-  const dotColor = { healthy: "#00e5a0", warning: "#ffc940", critical: "#ff4d6d" }[status] || "#00e5a0";
+  const dotColor = { healthy: "#22c55e", warning: "#f59e0b", critical: "#ef4444" }[status] || "#22c55e";
 
   return (
     <div
@@ -416,12 +416,12 @@ function RegionRow({ regionRow, alerts, onClick, onDelete }) {
       {/* Alert badges */}
       <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
         {critical > 0 && (
-          <span style={{ fontSize: 10, color: "#ff4d6d", background: "rgba(255,77,109,0.15)", borderRadius: 4, padding: "1px 5px", fontWeight: 700 }}>
-            🔴 {critical}
+          <span style={{ fontSize: 10, color: "#ef4444", background: "rgba(239,68,68,0.15)", borderRadius: 4, padding: "1px 5px", fontWeight: 700 }}>
+            ● {critical}
           </span>
         )}
         {warning > 0 && (
-          <span style={{ fontSize: 10, color: "#ffc940", background: "rgba(255,201,64,0.15)", borderRadius: 4, padding: "1px 5px", fontWeight: 700 }}>
+          <span style={{ fontSize: 10, color: "#f59e0b", background: "rgba(245,158,11,0.15)", borderRadius: 4, padding: "1px 5px", fontWeight: 700 }}>
             ⚠ {warning}
           </span>
         )}
@@ -473,9 +473,9 @@ function HealthRing({ total, healthy, warning, critical }) {
   }
 
   const rawSegs = [
-    { count: healthy,  color: "#00e5a0", label: "Healthy"  },
-    { count: warning,  color: "#ffc940", label: "Warning"  },
-    { count: critical, color: "#ff4d6d", label: "Critical" },
+    { count: healthy,  color: "#22c55e", label: "Healthy"  },
+    { count: warning,  color: "#f59e0b", label: "Warning"  },
+    { count: critical, color: "#ef4444", label: "Critical" },
   ].filter(s => s.count > 0);
 
   let offsetAngle = 0;
@@ -504,7 +504,7 @@ function HealthRing({ total, healthy, warning, critical }) {
     );
   });
 
-  const centreColor = critical > 0 ? "#ff4d6d" : warning > 0 ? "#ffc940" : "#00e5a0";
+  const centreColor = critical > 0 ? "#ef4444" : warning > 0 ? "#f59e0b" : "#22c55e";
 
   return (
     <div className="h-ring-wrap" style={{ position: "relative" }}>
@@ -542,6 +542,19 @@ function ResChip({ icon, label, value, sub }) {
       {sub && <span style={{ color: "var(--text-muted)", fontSize: 10 }}>· {sub}</span>}
     </div>
   );
+}
+
+function IconAccounts() {
+  return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 21h18"/><path d="M6 21V7l6-4 6 4v14"/><path d="M10 21v-6h4v6"/><path d="M9 10h.01M15 10h.01M9 14h.01M15 14h.01"/></svg>;
+}
+function IconHealthy() {
+  return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>;
+}
+function IconWarning() {
+  return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>;
+}
+function IconCritical() {
+  return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>;
 }
 
 function SummaryTile({ icon, label, value, color, pulse }) {

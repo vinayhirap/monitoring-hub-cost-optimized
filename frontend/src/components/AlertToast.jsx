@@ -56,9 +56,9 @@ export default function AlertToast() {
 
 function ToastItem({ toast, onClose }) {
   const isCrit  = toast.severity === "CRITICAL";
-  const color   = isCrit ? "#ff4d6d" : "#ffc940";
-  const bg      = isCrit ? "rgba(255,77,109,0.12)" : "rgba(255,201,64,0.10)";
-  const border  = isCrit ? "rgba(255,77,109,0.4)"  : "rgba(255,201,64,0.3)";
+  const color   = isCrit ? "#ef4444" : "#f59e0b";
+  const bg      = isCrit ? "rgba(239,68,68,0.12)" : "rgba(245,158,11,0.10)";
+  const border  = isCrit ? "rgba(239,68,68,0.4)"  : "rgba(245,158,11,0.3)";
 
   return (
     <div style={{

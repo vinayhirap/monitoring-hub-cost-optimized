@@ -4,13 +4,13 @@ import { useParams, useNavigate } from "react-router-dom";
 import { getAlerts } from "../api/api";
 
 const SERVICES = [
-  { id:"ec2",    label:"EC2",    icon:"🖥️", desc:"Compute instances",     color:"#00c7ff" },
+  { id:"ec2",    label:"EC2",    icon:"🖥️", desc:"Compute instances",     color:"#2bb3ac" },
   { id:"ebs",    label:"EBS",    icon:"💾",       desc:"Block storage volumes",  color:"#38bdf8" },
-  { id:"rds",    label:"RDS",    icon:"🗄️", desc:"Managed databases",      color:"#a78bfa" },
+  { id:"rds",    label:"RDS",    icon:"🗄️", desc:"Managed databases",      color:"#7c6ee0" },
   { id:"s3",     label:"S3",     icon:"🪣",       desc:"Object storage buckets", color:"#fbbf24" },
   { id:"ecs",    label:"ECS",    icon:"📦",       desc:"Container services",     color:"#34d399" },
   { id:"elb",    label:"ELB",    icon:"⚖️",     desc:"Load balancers",         color:"#f472b6" },
-  { id:"lambda", label:"Lambda", icon:"λ",           desc:"Serverless functions",   color:"#00e5a0" },
+  { id:"lambda", label:"Lambda", icon:"λ",           desc:"Serverless functions",   color:"#22c55e" },
 ];
 
 const SVC_RESOURCE_PATTERNS = {
@@ -75,7 +75,7 @@ export default function ServiceList() {
         </div>
         <button
           style={{
-            background: isNOC ? "rgba(0,199,255,0.12)" : "var(--bg-card)",
+            background: isNOC ? "rgba(43,179,172,0.12)" : "var(--bg-card)",
             border: `1px solid ${isNOC ? "var(--accent)" : "var(--border)"}`,
             color: isNOC ? "var(--accent)" : "var(--text-muted)",
             borderRadius: 6, padding: "7px 14px", fontSize: 13,
@@ -111,7 +111,7 @@ export default function ServiceList() {
 
 function ServiceCard({ svc, onClick, alertCount, hasCritical }) {
   const [hovered, setHovered] = useState(false);
-  const alertColor = hasCritical ? "#ff4d6d" : "#ffc940";
+  const alertColor = hasCritical ? "#ef4444" : "#f59e0b";
   return (
     <div onClick={onClick}
       onMouseEnter={() => setHovered(true)}

@@ -7,10 +7,10 @@ const BASE = "";
 const OPTIONAL_SERVICES = new Set([]);
 
 const SERVICE_META = {
-  EC2:    { icon: "🖥",  color: "#00c7ff", label: "EC2 Instances" },
+  EC2:    { icon: "🖥",  color: "#2bb3ac", label: "EC2 Instances" },
   EBS:    { icon: "💾",  color: "#38bdf8", label: "EBS Volumes" },
-  RDS:    { icon: "🗄",  color: "#a78bfa", label: "RDS Databases" },
-  Lambda: { icon: "λ",   color: "#00e5a0", label: "Lambda Functions" },
+  RDS:    { icon: "🗄",  color: "#7c6ee0", label: "RDS Databases" },
+  Lambda: { icon: "λ",   color: "#22c55e", label: "Lambda Functions" },
   S3:     { icon: "🪣",  color: "#fbbf24", label: "S3 Buckets" },
   ECS:    { icon: "📦",  color: "#34d399", label: "ECS Services" },
   ELB:    { icon: "⚖",   color: "#f472b6", label: "Load Balancers" },
@@ -290,7 +290,7 @@ fetchAccount(id).then(setAccount).catch(err => {
               {error ? (
                 <div style={{ padding: 16, color: "#ff6b8a", fontSize: 12 }}>
                   ⚠ Failed to load: {error}{" "}
-                  <button onClick={loadRows} style={{ marginLeft: 8, background: "none", border: "1px solid rgba(255,77,109,0.3)", color: "#ff6b8a", borderRadius: 4, padding: "2px 8px", cursor: "pointer", fontSize: 11 }}>
+                  <button onClick={loadRows} style={{ marginLeft: 8, background: "none", border: "1px solid rgba(239,68,68,0.3)", color: "#ff6b8a", borderRadius: 4, padding: "2px 8px", cursor: "pointer", fontSize: 11 }}>
                     Retry
                   </button>
                 </div>
@@ -371,9 +371,9 @@ function EC2Table({ rows, selected, onSelect, activeAlerts = [] }) {
                 {alertSev && (
                   <span style={{
                     fontSize:9, fontWeight:700, padding:"1px 5px", borderRadius:4,
-                    background: alertSev==="CRITICAL" ? "rgba(255,77,109,0.15)" : "rgba(255,201,64,0.15)",
-                    color: alertSev==="CRITICAL" ? "#ff4d6d" : "#ffc940",
-                    border: `1px solid ${alertSev==="CRITICAL" ? "rgba(255,77,109,0.3)" : "rgba(255,201,64,0.3)"}`,
+                    background: alertSev==="CRITICAL" ? "rgba(239,68,68,0.15)" : "rgba(245,158,11,0.15)",
+                    color: alertSev==="CRITICAL" ? "#ef4444" : "#f59e0b",
+                    border: `1px solid ${alertSev==="CRITICAL" ? "rgba(239,68,68,0.3)" : "rgba(245,158,11,0.3)"}`,
                     fontFamily:"var(--font-mono)",
                   }}>
                     {alertSev==="CRITICAL" ? "🔴" : "⚠"} {alertSev}
@@ -562,7 +562,7 @@ function ECSTable({ rows, selected, onSelect }) {
                 <div className="cpu-bar-bg">
                   <div className="cpu-bar-fill" style={{
                     width: `${Math.max(2, s.mem_utilization || 0)}%`,
-                    background: (s.mem_utilization || 0) > 85 ? "#ff4d6d" : (s.mem_utilization || 0) > 70 ? "#ffc940" : "#a78bfa"
+                    background: (s.mem_utilization || 0) > 85 ? "#ef4444" : (s.mem_utilization || 0) > 70 ? "#f59e0b" : "#7c6ee0"
                   }} />
                 </div>
                 <span className="cpu-label mono">{(s.mem_utilization || 0).toFixed(1)}%</span>
@@ -819,42 +819,42 @@ function ServiceDetailPanel({ service, row, metrics, mLoading, region, timeRange
           <div className="charts-grid">
             {service === "EC2" && (
               <div className="chart-full">
-                <MetricChart title="CPU Utilization %" data={metrics.cpu} color="#00c7ff" unit="%" threshold={85} thresholdLabel="alert threshold" timeRange={rangLabel} />
+                <MetricChart title="CPU Utilization %" data={metrics.cpu} color="#2bb3ac" unit="%" threshold={85} thresholdLabel="alert threshold" timeRange={rangLabel} />
               </div>
             )}
             {service === "EC2" && <>
-              <MetricChart title="Network In (KB)"  data={metrics.network_in?.map(d => ({ ...d, v: d.v / 1024 }))}  color="#00e5a0" unit="KB" timeRange={rangLabel} />
-              <MetricChart title="Network Out (KB)" data={metrics.network_out?.map(d => ({ ...d, v: d.v / 1024 }))} color="#a78bfa" unit="KB" timeRange={rangLabel} />
+              <MetricChart title="Network In (KB)"  data={metrics.network_in?.map(d => ({ ...d, v: d.v / 1024 }))}  color="#22c55e" unit="KB" timeRange={rangLabel} />
+              <MetricChart title="Network Out (KB)" data={metrics.network_out?.map(d => ({ ...d, v: d.v / 1024 }))} color="#7c6ee0" unit="KB" timeRange={rangLabel} />
               <MetricChart title="Disk Read (bytes)"  data={metrics.disk_read}  color="#fbbf24" unit="B" timeRange={rangLabel} />
               <MetricChart title="Disk Write (bytes)" data={metrics.disk_write} color="#fb7185" unit="B" timeRange={rangLabel} />
             </>}
 
             {service === "EBS" && <>
               <MetricChart title="Read Ops/s"      data={metrics.read_ops}      color="#38bdf8" unit=" ops" timeRange={rangLabel} />
-              <MetricChart title="Write Ops/s"     data={metrics.write_ops}     color="#a78bfa" unit=" ops" timeRange={rangLabel} />
-              <MetricChart title="Read Bytes"      data={metrics.read_bytes}    color="#00e5a0" unit="B"    timeRange={rangLabel} />
+              <MetricChart title="Write Ops/s"     data={metrics.write_ops}     color="#7c6ee0" unit=" ops" timeRange={rangLabel} />
+              <MetricChart title="Read Bytes"      data={metrics.read_bytes}    color="#22c55e" unit="B"    timeRange={rangLabel} />
               <MetricChart title="Write Bytes"     data={metrics.write_bytes}   color="#fbbf24" unit="B"    timeRange={rangLabel} />
-              <MetricChart title="Queue Length"    data={metrics.queue_length}  color="#ff4d6d" unit=""     threshold={5} timeRange={rangLabel} />
-              <MetricChart title="Burst Balance %" data={metrics.burst_balance} color="#00c7ff" unit="%"    threshold={20} timeRange={rangLabel} />
+              <MetricChart title="Queue Length"    data={metrics.queue_length}  color="#ef4444" unit=""     threshold={5} timeRange={rangLabel} />
+              <MetricChart title="Burst Balance %" data={metrics.burst_balance} color="#2bb3ac" unit="%"    threshold={20} timeRange={rangLabel} />
             </>}
 
             {service === "Lambda" && <>
-              <MetricChart title="Invocations"     data={metrics.invocations} color="#00e5a0" unit=""   timeRange={rangLabel} />
-              <MetricChart title="Errors"          data={metrics.errors}      color="#ff4d6d" unit=""   threshold={5} timeRange={rangLabel} />
+              <MetricChart title="Invocations"     data={metrics.invocations} color="#22c55e" unit=""   timeRange={rangLabel} />
+              <MetricChart title="Errors"          data={metrics.errors}      color="#ef4444" unit=""   threshold={5} timeRange={rangLabel} />
               <div className="chart-full">
-                <MetricChart title="Duration (ms)" data={metrics.duration}    color="#00c7ff" unit="ms" threshold={8000} timeRange={rangLabel} />
+                <MetricChart title="Duration (ms)" data={metrics.duration}    color="#2bb3ac" unit="ms" threshold={8000} timeRange={rangLabel} />
               </div>
-              <MetricChart title="Throttles"       data={metrics.throttles}   color="#ffc940" unit=""   timeRange={rangLabel} />
-              <MetricChart title="Concurrent Exec" data={metrics.concurrent}  color="#a78bfa" unit=""   timeRange={rangLabel} />
+              <MetricChart title="Throttles"       data={metrics.throttles}   color="#f59e0b" unit=""   timeRange={rangLabel} />
+              <MetricChart title="Concurrent Exec" data={metrics.concurrent}  color="#7c6ee0" unit=""   timeRange={rangLabel} />
             </>}
 
             {service === "RDS" && <>
               <div className="chart-full">
-                <MetricChart title="CPU Utilization %" data={metrics.cpu} color="#00c7ff" unit="%" threshold={85} timeRange={rangLabel} />
+                <MetricChart title="CPU Utilization %" data={metrics.cpu} color="#2bb3ac" unit="%" threshold={85} timeRange={rangLabel} />
               </div>
-              <MetricChart title="DB Connections"  data={metrics.db_connections}  color="#a78bfa" unit=""    timeRange={rangLabel} />
+              <MetricChart title="DB Connections"  data={metrics.db_connections}  color="#7c6ee0" unit=""    timeRange={rangLabel} />
               <MetricChart title="Free Memory"     data={metrics.freeable_memory} color="#f472b6" unit="B"   timeRange={rangLabel} />
-              <MetricChart title="Read IOPS"       data={metrics.read_iops}       color="#00e5a0" unit=" ops" timeRange={rangLabel} />
+              <MetricChart title="Read IOPS"       data={metrics.read_iops}       color="#22c55e" unit=" ops" timeRange={rangLabel} />
               <MetricChart title="Write IOPS"      data={metrics.write_iops}      color="#fbbf24" unit=" ops" timeRange={rangLabel} />
               <MetricChart title="Read Latency"    data={metrics.read_latency}    color="#38bdf8" unit="s"   threshold={0.02} timeRange={rangLabel} />
               <MetricChart title="Write Latency"   data={metrics.write_latency}   color="#e879f9" unit="s"   threshold={0.02} timeRange={rangLabel} />
@@ -865,29 +865,29 @@ function ServiceDetailPanel({ service, row, metrics, mLoading, region, timeRange
                 <MetricChart title="Bucket Size (bytes)" data={metrics?.bucket_size   || []} color="#fbbf24" unit="B" timeRange={rangLabel} />
               </div>
               <div className="chart-full">
-                <MetricChart title="Object Count"        data={metrics?.object_count  || []} color="#00e5a0" unit=""  timeRange={rangLabel} />
+                <MetricChart title="Object Count"        data={metrics?.object_count  || []} color="#22c55e" unit=""  timeRange={rangLabel} />
               </div>
-              <MetricChart title="All Requests"          data={metrics?.all_requests  || []} color="#00c7ff" unit=""  timeRange={rangLabel} />
-              <MetricChart title="GET Requests"          data={metrics?.get_requests  || []} color="#a78bfa" unit=""  timeRange={rangLabel} />
+              <MetricChart title="All Requests"          data={metrics?.all_requests  || []} color="#2bb3ac" unit=""  timeRange={rangLabel} />
+              <MetricChart title="GET Requests"          data={metrics?.get_requests  || []} color="#7c6ee0" unit=""  timeRange={rangLabel} />
               <MetricChart title="PUT Requests"          data={metrics?.put_requests  || []} color="#38bdf8" unit=""  timeRange={rangLabel} />
-              <MetricChart title="4XX Errors"            data={metrics?.errors_4xx    || []} color="#ffc940" unit=""  timeRange={rangLabel} />
-              <MetricChart title="5XX Errors"            data={metrics?.errors_5xx    || []} color="#ff4d6d" unit=""  threshold={5} timeRange={rangLabel} />
+              <MetricChart title="4XX Errors"            data={metrics?.errors_4xx    || []} color="#f59e0b" unit=""  timeRange={rangLabel} />
+              <MetricChart title="5XX Errors"            data={metrics?.errors_5xx    || []} color="#ef4444" unit=""  threshold={5} timeRange={rangLabel} />
               <MetricChart title="Bytes Downloaded"      data={metrics?.bytes_download|| []} color="#f472b6" unit="B" timeRange={rangLabel} />
             </>}
 
             {service === "ELB" && <>
               <div className="chart-full">
-                <MetricChart title="Request Count"           data={metrics?.requests           || []} color="#00c7ff" unit=""  timeRange={rangLabel} />
+                <MetricChart title="Request Count"           data={metrics?.requests           || []} color="#2bb3ac" unit=""  timeRange={rangLabel} />
               </div>
-              <MetricChart title="5XX Errors (Target)"       data={metrics?.errors_5xx         || []} color="#ff4d6d" unit=""  threshold={20} timeRange={rangLabel} />
-              <MetricChart title="4XX Errors (Target)"       data={metrics?.errors_4xx         || []} color="#ffc940" unit=""  threshold={50} timeRange={rangLabel} />
+              <MetricChart title="5XX Errors (Target)"       data={metrics?.errors_5xx         || []} color="#ef4444" unit=""  threshold={20} timeRange={rangLabel} />
+              <MetricChart title="4XX Errors (Target)"       data={metrics?.errors_4xx         || []} color="#f59e0b" unit=""  threshold={50} timeRange={rangLabel} />
               <MetricChart title="5XX Errors (ELB)"          data={metrics?.errors_elb_5xx     || []} color="#f472b6" unit=""  threshold={5}  timeRange={rangLabel} />
               <div className="chart-full">
                 <MetricChart title="Target Response Time (s)" data={metrics?.latency           || []} color="#fbbf24" unit="s" threshold={0.5} timeRange={rangLabel} />
               </div>
-              <MetricChart title="Healthy Hosts"             data={metrics?.healthy_hosts      || []} color="#00e5a0" unit=""  timeRange={rangLabel} />
-              <MetricChart title="Unhealthy Hosts"           data={metrics?.unhealthy_hosts    || []} color="#ff4d6d" unit=""  threshold={1} timeRange={rangLabel} />
-              <MetricChart title="Active Connections"        data={metrics?.active_connections || []} color="#a78bfa" unit=""  timeRange={rangLabel} />
+              <MetricChart title="Healthy Hosts"             data={metrics?.healthy_hosts      || []} color="#22c55e" unit=""  timeRange={rangLabel} />
+              <MetricChart title="Unhealthy Hosts"           data={metrics?.unhealthy_hosts    || []} color="#ef4444" unit=""  threshold={1} timeRange={rangLabel} />
+              <MetricChart title="Active Connections"        data={metrics?.active_connections || []} color="#7c6ee0" unit=""  timeRange={rangLabel} />
               <MetricChart title="New Connections"           data={metrics?.new_connections    || []} color="#38bdf8" unit=""  timeRange={rangLabel} />
             </>}
 
@@ -896,10 +896,10 @@ function ServiceDetailPanel({ service, row, metrics, mLoading, region, timeRange
                 <MetricChart title="CPU Utilization %"    data={metrics?.cpu_utilization    || []} color="#34d399" unit="%" threshold={85} timeRange={rangLabel} />
               </div>
               <div className="chart-full">
-                <MetricChart title="Memory Utilization %" data={metrics?.mem_utilization    || []} color="#a78bfa" unit="%" threshold={85} timeRange={rangLabel} />
+                <MetricChart title="Memory Utilization %" data={metrics?.mem_utilization    || []} color="#7c6ee0" unit="%" threshold={85} timeRange={rangLabel} />
               </div>
-              <MetricChart title="Running Tasks"          data={metrics?.running_task_count || []} color="#00e5a0" unit=""  timeRange={rangLabel} />
-              <MetricChart title="Pending Tasks"          data={metrics?.pending_task_count || []} color="#ffc940" unit=""  timeRange={rangLabel} />
+              <MetricChart title="Running Tasks"          data={metrics?.running_task_count || []} color="#22c55e" unit=""  timeRange={rangLabel} />
+              <MetricChart title="Pending Tasks"          data={metrics?.pending_task_count || []} color="#f59e0b" unit=""  timeRange={rangLabel} />
               <MetricChart title="Desired Tasks"          data={metrics?.desired_task_count || []} color="#38bdf8" unit=""  timeRange={rangLabel} />
               <MetricChart title="CPU Reserved"           data={metrics?.cpu_reserved       || []} color="#f472b6" unit=""  timeRange={rangLabel} />
               <MetricChart title="Memory Reserved"        data={metrics?.mem_reserved       || []} color="#fbbf24" unit=""  timeRange={rangLabel} />
@@ -931,7 +931,7 @@ function ServiceDetailPanel({ service, row, metrics, mLoading, region, timeRange
           transition: all 0.15s; white-space: nowrap;
         }
         .tr-btn:hover { color: #a8bdd8; background: rgba(99,130,190,0.1); }
-        .tr-active { background: rgba(0,199,255,0.15) !important; color: #00c7ff !important; font-weight: 700; }
+        .tr-active { background: rgba(43,179,172,0.15) !important; color: #2bb3ac !important; font-weight: 700; }
         .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
         .chart-full { grid-column: 1 / -1; }
         .rel-list { display: flex; flex-direction: column; gap: 6px; }
@@ -947,12 +947,12 @@ function ServiceDetailPanel({ service, row, metrics, mLoading, region, timeRange
         .rel-sub  { font-size: 10px; color: rgba(99,130,190,0.55); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .rel-badge {
           font-size: 10px; font-family: monospace;
-          background: rgba(0,229,160,0.12); color: #00e5a0;
-          border: 1px solid rgba(0,229,160,0.25); border-radius: 4px;
+          background: rgba(34,197,94,0.12); color: #22c55e;
+          border: 1px solid rgba(34,197,94,0.25); border-radius: 4px;
           padding: 2px 7px; white-space: nowrap; flex-shrink: 0;
         }
-        .sc-ok   { font-size: 10px; font-weight: 700; color: #00e5a0; font-family: monospace; }
-        .sc-fail { font-size: 10px; font-weight: 700; color: #ff4d6d; font-family: monospace; background: rgba(255,77,109,0.1); border: 1px solid rgba(255,77,109,0.25); border-radius: 4px; padding: 2px 7px; }
+        .sc-ok   { font-size: 10px; font-weight: 700; color: #22c55e; font-family: monospace; }
+        .sc-fail { font-size: 10px; font-weight: 700; color: #ef4444; font-family: monospace; background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.25); border-radius: 4px; padding: 2px 7px; }
       `}</style>
     </div>
   );
@@ -1057,7 +1057,7 @@ function shortDate(iso) { try { return new Date(iso).toLocaleDateString("en-US",
 function fmtBytes(b) { if (b == null) return "—"; if (b < 1024) return `${b} B`; if (b < 1048576) return `${(b / 1024).toFixed(1)} KB`; if (b < 1073741824) return `${(b / 1048576).toFixed(1)} MB`; return `${(b / 1073741824).toFixed(2)} GB`; }
 function StateBadge({ state }) { const m = { running: "sb-green", stopped: "sb-muted", pending: "sb-yellow", terminated: "sb-red" }; return <span className={`state-badge ${m[state] || "sb-muted"}`}>{state}</span>; }
 function StatusChip({ status, colorMap = {} }) { const s = (status || "").toLowerCase(); const d = { available: "green", active: "green", running: "green", "in-use": "green", stopped: "muted", failed: "red", public: "red", private: "green" }; const color = { ...d, ...colorMap }[s] || "yellow"; return <span className={`state-badge sb-${color}`} style={{ textTransform: "capitalize" }}>{status || "—"}</span>; }
-function CpuBar({ cpu, state }) { if (state !== "running") return <span className="mono small muted">—</span>; const pct = cpu ?? 0; const color = pct > 75 ? "#ff4d6d" : pct > 50 ? "#ffc940" : "#00e5a0"; return <div className="cpu-cell"><div className="cpu-bar-bg"><div className="cpu-bar-fill" style={{ width: `${Math.max(2, pct)}%`, background: color }} /></div><span className="cpu-label mono">{pct.toFixed(1)}%</span></div>; }
+function CpuBar({ cpu, state }) { if (state !== "running") return <span className="mono small muted">—</span>; const pct = cpu ?? 0; const color = pct > 75 ? "#ef4444" : pct > 50 ? "#f59e0b" : "#22c55e"; return <div className="cpu-cell"><div className="cpu-bar-bg"><div className="cpu-bar-fill" style={{ width: `${Math.max(2, pct)}%`, background: color }} /></div><span className="cpu-label mono">{pct.toFixed(1)}%</span></div>; }
 function QuickStat({ label, value, color, mono }) { return <div className="qs-item"><div className="qs-label">{label}</div><div className={`qs-value ${color ? `c-${color}` : ""}${mono ? " mono" : ""}`}>{value}</div></div>; }
 
 function MetricChart({ title, data, color, unit, threshold, thresholdLabel, timeRange }) {
@@ -1094,7 +1094,7 @@ function MetricChart({ title, data, color, unit, threshold, thresholdLabel, time
             itemStyle={{ color }}
           />
           {threshold && (
-            <Line type="monotone" dataKey="threshold" stroke="#ff4d6d" strokeDasharray="4 4" dot={false} strokeWidth={1} legendType="none" />
+            <Line type="monotone" dataKey="threshold" stroke="#ef4444" strokeDasharray="4 4" dot={false} strokeWidth={1} legendType="none" />
           )}
           <Line type="monotone" dataKey="v" stroke={color} strokeWidth={2} dot={false} activeDot={{ r: 3, fill: color }} />
         </LineChart>

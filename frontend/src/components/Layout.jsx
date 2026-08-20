@@ -25,6 +25,7 @@ export default function Layout() {
   const [now, setNow]     = useState(new Date());
   const [alertCount, setAlertCount] = useState(0);
   const [dark, setDark]   = useState(() => localStorage.getItem("theme") !== "light");
+  const [navOpen, setNavOpen] = useState(false);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
@@ -64,19 +65,16 @@ export default function Layout() {
   const visibleNav = NAV_ITEMS.filter(item => item.roles.includes(role));
 
   return (
-    <div className="layout">
+    <div className={`layout ${navOpen ? "nav-open" : ""}`}>
+      <div className="sidebar-scrim" onClick={() => setNavOpen(false)} aria-hidden="true" />
       <aside className="sidebar">
         <div className="sidebar-brand">
           <div className="sidebar-logo">
-            <svg width="28" height="28" viewBox="0 0 36 36" fill="none">
-              <rect x="2" y="2" width="32" height="32" rx="8" fill="rgba(0,199,255,0.1)" stroke="rgba(0,199,255,0.35)" strokeWidth="1.5"/>
-              <path d="M10 24 L18 12 L26 24" stroke="#00c7ff" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M13 20 L23 20" stroke="#00e5a0" strokeWidth="2" strokeLinecap="round"/>
-            </svg>
+            <img src="/aurionpro-mark.svg" alt="Aurionpro" width="28" height="28" />
           </div>
           <div>
-            <div className="sidebar-brand-name">ASLOps</div>
-            <div className="sidebar-brand-sub">Monitoring Dashboard</div>
+            <div className="sidebar-brand-name">Aurionpro</div>
+            <div className="sidebar-brand-sub">LeadNext &middot; Monitoring Hub</div>
           </div>
         </div>
 
@@ -85,6 +83,8 @@ export default function Layout() {
             <NavLink
               key={to}
               to={to}
+              title={label}
+              onClick={() => setNavOpen(false)}
               className={({ isActive }) => `nav-item ${isActive ? "nav-active" : ""}`}
             >
               <span className="nav-icon"><Icon /></span>
@@ -109,6 +109,18 @@ export default function Layout() {
 
       <div className="main-wrap">
         <header className="topbar">
+          <button
+            className="btn-nav-toggle"
+            onClick={() => setNavOpen(o => !o)}
+            aria-label={navOpen ? "Close navigation menu" : "Open navigation menu"}
+            aria-expanded={navOpen}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="3" y1="6" x2="21" y2="6"/>
+              <line x1="3" y1="12" x2="21" y2="12"/>
+              <line x1="3" y1="18" x2="21" y2="18"/>
+            </svg>
+          </button>
           <div className="topbar-page-label" id="page-label" />
           <div className="topbar-right">
             <div className="live-pill">
@@ -119,6 +131,7 @@ export default function Layout() {
               className="btn-theme-toggle"
               onClick={() => setDark(d => !d)}
               title={dark ? "Switch to light theme" : "Switch to dark theme"}
+              aria-label={dark ? "Switch to light theme" : "Switch to dark theme"}
             >
               {dark ? "☀" : "🌙"}
             </button>
@@ -137,13 +150,13 @@ export default function Layout() {
                 {role.toUpperCase()}
               </span>
             </div>
-            <button className="btn-logout" onClick={handleLogout} title="Logout">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <button className="btn-logout" onClick={handleLogout} title="Logout" aria-label="Log out">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
                 <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
                 <polyline points="16 17 21 12 16 7"/>
                 <line x1="21" y1="12" x2="9" y2="12"/>
               </svg>
-              Logout
+              <span>Logout</span>
             </button>
           </div>
         </header>

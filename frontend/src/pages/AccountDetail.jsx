@@ -253,20 +253,20 @@ export default function AccountDetail() {
                   <MetricChart
                     title="CPU Utilization %"
                     data={metrics.cpu}
-                    color="#00c7ff"
+                    color="#2bb3ac"
                     unit="%"
                     threshold={75}
                   />
                   <MetricChart
                     title="Network In (kilobytes)"
                     data={metrics.network_in?.map(d => ({ ...d, v: d.v / 1024 }))}
-                    color="#00e5a0"
+                    color="#22c55e"
                     unit="KB"
                   />
                   <MetricChart
                     title="Network Out (kilobytes)"
                     data={metrics.network_out?.map(d => ({ ...d, v: d.v / 1024 }))}
-                    color="#a78bfa"
+                    color="#7c6ee0"
                     unit="KB"
                   />
                   <MetricChart
@@ -316,7 +316,7 @@ function StateBadge({ state }) {
 
 function CpuCell({ cpu, state }) {
   if (state !== "running") return <span className="mono small muted">—</span>;
-  const color = cpu > 75 ? "#ff4d6d" : cpu > 50 ? "#ffc940" : "#00e5a0";
+  const color = cpu > 75 ? "#ef4444" : cpu > 50 ? "#f59e0b" : "#22c55e";
   const w = Math.max(2, cpu);
   return (
     <div className="cpu-cell">
@@ -370,7 +370,7 @@ function MetricChart({ title, data, color, unit, threshold }) {
             itemStyle={{ color }}
           />
           {threshold && (
-            <Line type="monotone" dataKey={() => threshold} stroke="#ff4d6d" strokeDasharray="4 4" dot={false} strokeWidth={1} />
+            <Line type="monotone" dataKey={() => threshold} stroke="#ef4444" strokeDasharray="4 4" dot={false} strokeWidth={1} />
           )}
           <Line type="monotone" dataKey="v" stroke={color} strokeWidth={2} dot={false} activeDot={{ r: 3, fill: color }} />
         </LineChart>

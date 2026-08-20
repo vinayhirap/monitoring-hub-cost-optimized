@@ -43,17 +43,12 @@ export default function Login() {
 
       <div className="login-card">
         <div className="login-brand">
-          <div className="login-logo">
-            <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
-              <rect x="2" y="2" width="32" height="32" rx="8" fill="rgba(0,199,255,0.12)" stroke="rgba(0,199,255,0.4)" strokeWidth="1.5"/>
-              <path d="M10 24 L18 12 L26 24" stroke="#00c7ff" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M13 20 L23 20" stroke="#00e5a0" strokeWidth="2" strokeLinecap="round"/>
-            </svg>
-          </div>
-          <div>
-            <div className="login-brand-name">ASLOps</div>
-            <div className="login-brand-sub">Monitoring Dashboard</div>
-          </div>
+          <img
+            src="/aurionpro-leadnext.svg"
+            alt="Aurionpro LeadNext"
+            className="login-logo-full"
+          />
+          <div className="login-brand-sub">Monitoring Hub</div>
         </div>
 
         <h1 className="login-title">Welcome back</h1>

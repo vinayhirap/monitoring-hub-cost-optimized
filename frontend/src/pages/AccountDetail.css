@@ -47,7 +47,7 @@
   color: var(--text-primary); padding: 7px 12px; border-radius: var(--radius);
   font-size: 12px; outline: none; font-family: var(--font-sans);
 }
-.inst-search:focus { border-color: rgba(0,199,255,0.4); }
+.inst-search:focus { border-color: rgba(43,179,172,0.4); }
 .inst-search::placeholder { color: var(--text-muted); }
 
 .state-filters { display: flex; gap: 4px; }
@@ -57,7 +57,7 @@
   cursor: pointer; transition: all .15s; display: flex; align-items: center; gap: 5px;
 }
 .sf-btn:hover { color: var(--text-secondary); border-color: var(--border-bright); }
-.sf-active    { background: var(--accent-dim); border-color: rgba(0,199,255,0.3); color: var(--accent); }
+.sf-active    { background: var(--accent-dim); border-color: rgba(43,179,172,0.3); color: var(--accent); }
 .sf-count     { font-family: var(--font-mono); font-size: 10px; opacity: .8; }
 
 .sort-select {
@@ -67,8 +67,8 @@
 }
 
 /* Table */
-.inst-table-wrap { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
-.inst-table { width: 100%; border-collapse: collapse; }
+.inst-table-wrap { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow-x: auto; }
+.inst-table { width: 100%; min-width: 600px; border-collapse: collapse; }
 .inst-table thead { background: var(--bg-surface); }
 .inst-table th {
   padding: 10px 12px; text-align: left; font-size: 10px; font-weight: 700;
@@ -78,8 +78,8 @@
 .inst-table td { padding: 10px 12px; border-bottom: 1px solid rgba(99,130,190,.08); font-size: 12px; vertical-align: middle; }
 .inst-table tbody tr:last-child td { border-bottom: none; }
 .inst-row { cursor: pointer; transition: background .1s; }
-.inst-row:hover { background: rgba(0,199,255,.03); }
-.inst-selected { background: rgba(0,199,255,.06) !important; border-left: 2px solid var(--accent); }
+.inst-row:hover { background: rgba(43,179,172,.03); }
+.inst-selected { background: rgba(43,179,172,.06) !important; border-left: 2px solid var(--accent); }
 
 .inst-name { font-weight: 600; color: var(--text-primary); font-size: 12px; }
 .inst-id   { font-size: 10px; color: var(--text-muted); margin-top: 1px; }
@@ -90,10 +90,10 @@
 
 /* State badge */
 .state-badge { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 3px; font-family: var(--font-mono); }
-.sb-green  { background: rgba(0,229,160,.1);  color: var(--green);  border: 1px solid rgba(0,229,160,.2); }
+.sb-green  { background: rgba(34,197,94,.1);  color: var(--green);  border: 1px solid rgba(34,197,94,.2); }
 .sb-muted  { background: rgba(99,130,190,.08); color: var(--text-muted); border: 1px solid var(--border); }
-.sb-yellow { background: rgba(255,201,64,.1); color: var(--yellow); border: 1px solid rgba(255,201,64,.2); }
-.sb-red    { background: rgba(255,77,109,.1); color: var(--red);    border: 1px solid rgba(255,77,109,.2); }
+.sb-yellow { background: rgba(245,158,11,.1); color: var(--yellow); border: 1px solid rgba(245,158,11,.2); }
+.sb-red    { background: rgba(239,68,68,.1); color: var(--red);    border: 1px solid rgba(239,68,68,.2); }
 
 /* CPU cell */
 .cpu-cell  { display: flex; align-items: center; gap: 6px; }

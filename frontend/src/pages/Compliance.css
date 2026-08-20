@@ -63,7 +63,7 @@
 
 .c-btn-primary {
   background: var(--accent-dim);
-  border: 1px solid rgba(0,199,255,.3);
+  border: 1px solid rgba(43,179,172,.3);
   color: var(--accent);
   padding: 6px 14px;
   border-radius: var(--radius);
@@ -73,7 +73,7 @@
   transition: all .15s;
 }
 .c-btn-primary:disabled { opacity: .4; cursor: not-allowed; }
-.c-btn-primary:hover:not(:disabled) { background: rgba(0,199,255,.2); }
+.c-btn-primary:hover:not(:disabled) { background: rgba(43,179,172,.2); }
 
 /* Audit Card */
 .audit-card {
@@ -109,7 +109,7 @@
   width: 260px;
   font-family: var(--font-sans);
 }
-.c-search:focus { border-color: rgba(0,199,255,.4); }
+.c-search:focus { border-color: rgba(43,179,172,.4); }
 .c-search::placeholder { color: var(--text-muted); }
 
 /* States */
@@ -130,14 +130,14 @@
   align-items: center;
   gap: 12px;
   padding: 16px 18px;
-  background: rgba(255,77,109,.08);
-  border-bottom: 1px solid rgba(255,77,109,.2);
+  background: rgba(239,68,68,.08);
+  border-bottom: 1px solid rgba(239,68,68,.2);
   color: var(--red);
   font-size: 13px;
 }
 .c-retry {
-  background: rgba(255,77,109,.12);
-  border: 1px solid rgba(255,77,109,.3);
+  background: rgba(239,68,68,.12);
+  border: 1px solid rgba(239,68,68,.3);
   color: var(--red);
   padding: 4px 10px;
   border-radius: var(--radius);
@@ -166,8 +166,8 @@
   transition: background .1s;
 }
 .audit-row:last-child { border-bottom: none; }
-.audit-row:hover      { background: rgba(0,199,255,.03); }
-.audit-row.expanded   { background: rgba(0,199,255,.04); }
+.audit-row:hover      { background: rgba(43,179,172,.03); }
+.audit-row.expanded   { background: rgba(43,179,172,.04); }
 
 .ar-time   { min-width: 148px; flex-shrink: 0; }
 .ar-ts     { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); }
@@ -206,8 +206,8 @@
   font-family: var(--font-mono);
 }
 .ar-role.admin  { background: rgba(249,115,22,.12); color: var(--accent-orange); }
-.ar-role.viewer { background: rgba(0,199,255,.1);   color: var(--accent); }
-.ar-role.editor { background: rgba(167,139,250,.1); color: var(--accent-purple); }
+.ar-role.viewer { background: rgba(43,179,172,.1);   color: var(--accent); }
+.ar-role.editor { background: rgba(124,110,224,.1); color: var(--accent-purple); }
 .ar-role.system { background: rgba(99,130,190,.1);  color: var(--text-secondary); }
 
 .ar-expand { font-size: 10px; color: var(--text-muted); flex-shrink: 0; align-self: center; }
