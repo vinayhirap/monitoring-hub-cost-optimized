@@ -56,6 +56,10 @@ body {
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
+.sidebar-brand-text {
+  min-width: 0;
+  overflow: hidden;
+}
 .sidebar-logo { flex-shrink: 0; }
 .sidebar-brand-name {
   font-size: 14px;
@@ -63,13 +67,19 @@ body {
   color: #e2e8f0;
   letter-spacing: 0.02em;
   line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .sidebar-brand-sub {
   font-size: 9px;
   color: var(--text-muted);
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.05em;
   margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ── nav ── */

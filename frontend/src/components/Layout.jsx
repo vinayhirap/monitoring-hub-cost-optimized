@@ -72,7 +72,7 @@ export default function Layout() {
           <div className="sidebar-logo">
             <img src="/aurionpro-mark.svg" alt="Aurionpro" width="28" height="28" />
           </div>
-          <div>
+          <div className="sidebar-brand-text">
             <div className="sidebar-brand-name">Aurionpro</div>
             <div className="sidebar-brand-sub">LeadNext &middot; Monitoring Hub</div>
           </div>
