@@ -74,7 +74,7 @@ export default function Layout() {
           </div>
           <div className="sidebar-brand-text">
             <div className="sidebar-brand-name">Aurionpro</div>
-            <div className="sidebar-brand-sub">LeadNext &middot; Monitoring Hub</div>
+            <div className="sidebar-brand-sub">LeadNext<br />CloudOps</div>
           </div>
         </div>
 
