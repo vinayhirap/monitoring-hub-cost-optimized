@@ -1,6 +1,7 @@
 # app/api/settings.py
 from fastapi import APIRouter, Body, Query
 from app.db import get_connection
+from app.threshold_defaults import DEFAULT_THRESHOLDS, FALLBACK_THRESHOLD
 import datetime, json, logging
 
 logger = logging.getLogger(__name__)
@@ -75,26 +76,21 @@ def toggle_threshold(threshold_id: int, payload: dict = Body(...)):
 
 @router.post("/thresholds/seed")
 def seed_default_thresholds(account_id: int = Query(3)):
-    DEFAULTS = {
-        "CPUUtilization":            (70.0,   85.0,   ">"),
-        "StatusCheckFailed":         (0.0,    1.0,    ">"),
-        "VolumeQueueLength":         (1.0,    5.0,    ">"),
-        "BurstBalance":              (30.0,   10.0,   "<"),
-        "HTTPCode_Target_5XX_Count": (5.0,    20.0,   ">"),
-        "HealthyHostCount":          (1.0,    0.0,    "<"),
-        "FreeStorageSpace":          (10.0,   5.0,    "<"),
-        "DatabaseConnections":       (80.0,   95.0,   ">"),
-        "Errors":                    (1.0,    5.0,    ">"),
-        "Duration":                  (3000.0, 8000.0, ">"),
-        "NetworkIn":                 (80.0,   100.0,  ">"),
-        "NetworkOut":                (80.0,   100.0,  ">"),
-    }
+    # Only seed thresholds for metrics actually enabled in "Metrics to
+    # Monitor" for this account (account_metric_selections). Previously this
+    # pulled from the entire metric_catalog regardless of selection, so the
+    # Metric Thresholds section could show/create rows for metrics that
+    # weren't even being collected for this account.
     conn = get_connection(); cur = conn.cursor(dictionary=True)
-    cur.execute("SELECT * FROM metric_catalog")
+    cur.execute("""
+        SELECT mc.* FROM metric_catalog mc
+        JOIN account_metric_selections ams ON ams.metric_id = mc.id
+        WHERE ams.aws_account_id = %s AND ams.enabled = 1 AND mc.metric_name != ''
+    """, (account_id,))
     metrics = cur.fetchall()
     inserted = 0
     for m in metrics:
-        warn, crit, comp = DEFAULTS.get(m["metric_name"], (70.0, 90.0, ">"))
+        warn, crit, comp = DEFAULT_THRESHOLDS.get(m["metric_name"], FALLBACK_THRESHOLD)
         try:
             cur.execute("""
                 INSERT IGNORE INTO thresholds

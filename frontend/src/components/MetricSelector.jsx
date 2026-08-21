@@ -5,7 +5,7 @@ import "./MetricSelector.css";
 const SECTION_META = {
   core:      { label: "Core",      hint: "Already collected by this app today" },
   extended:  { label: "Extended",  hint: "Curated, common AWS services" },
-  directory: { label: "Directory", hint: "100+ AWS namespaces â€” discover live metric names per account" },
+  directory: { label: "Directory", hint: "100+ AWS namespaces — discover live metric names per account" },
 };
 const CATEGORY_TABS = ["all", "core", "extended", "directory"];
 const CATEGORY_TAB_LABEL = { all: "All", core: "Core", extended: "Extended", directory: "Directory" };
@@ -20,13 +20,13 @@ function initials(name) {
  * Reusable AWS CloudWatch metric picker.
  *
  * props:
- *   catalog       â€” [{ service, display_service, namespace, category, metrics:[{id, metric_name, statistic, unit, description, is_default, enabled?}], directory_id }]
- *   selectedIds   â€” Set<number> of currently-enabled metric ids (controlled)
- *   onChange(nextSet) â€” called with a new Set whenever selection changes
- *   onDiscover(namespace) â€” optional async fn; runs live AWS discovery and
+ *   catalog       — [{ service, display_service, namespace, category, metrics:[{id, metric_name, statistic, unit, description, is_default, enabled?}], directory_id }]
+ *   selectedIds   — Set<number> of currently-enabled metric ids (controlled)
+ *   onChange(nextSet) — called with a new Set whenever selection changes
+ *   onDiscover(namespace) — optional async fn; runs live AWS discovery and
  *                            persists results server-side. Caller must
  *                            refresh `catalog` afterwards with real ids.
- *   compact       â€” slightly shorter max-height, used inline in onboarding
+ *   compact       — slightly shorter max-height, used inline in onboarding
  */
 export default function MetricSelector({ catalog, selectedIds, onChange, onDiscover, compact = false }) {
   const [search, setSearch]           = useState("");
@@ -124,7 +124,7 @@ export default function MetricSelector({ catalog, selectedIds, onChange, onDisco
           </svg>
           <input
             className="ms-search"
-            placeholder="Search metrics or servicesâ€¦"
+            placeholder="Search metrics or services…"
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
@@ -146,7 +146,7 @@ export default function MetricSelector({ catalog, selectedIds, onChange, onDisco
       <div className="ms-summary-bar">
         <span className="ms-count-badge">
           <strong>{totalSelected}</strong> metric{totalSelected === 1 ? "" : "s"} selected
-          <span className="ms-count-sub"> Â· {totalGroups} service{totalGroups === 1 ? "" : "s"} shown</span>
+          <span className="ms-count-sub"> · {totalGroups} service{totalGroups === 1 ? "" : "s"} shown</span>
         </span>
         <div className="ms-actions">
           <button type="button" className="ms-btn-ghost" onClick={applyDefaults}>âœ“ Apply recommended</button>
@@ -229,7 +229,7 @@ export default function MetricSelector({ catalog, selectedIds, onChange, onDisco
                             {isDirectoryEmpty && (
                               <div className="ms-discover-row">
                                 <span className="ms-discover-hint">
-                                  Metric names for this service aren't pre-loaded â€” discover what your account actually publishes.
+                                  Metric names for this service aren't pre-loaded — discover what your account actually publishes.
                                 </span>
                                 {onDiscover ? (
                                   <button
@@ -238,7 +238,7 @@ export default function MetricSelector({ catalog, selectedIds, onChange, onDisco
                                     disabled={discovering === group.namespace}
                                     onClick={() => handleDiscover(group)}
                                   >
-                                    {discovering === group.namespace ? "Discoveringâ€¦" : "Discover metrics"}
+                                    {discovering === group.namespace ? "Discovering…" : "Discover metrics"}
                                   </button>
                                 ) : (
                                   <span className="ms-discover-hint-sub">Available after onboarding (Settings â†’ Metrics).</span>
@@ -253,7 +253,7 @@ export default function MetricSelector({ catalog, selectedIds, onChange, onDisco
                                   onChange={() => toggleMetric(m.id)}
                                 />
                                 <span className="ms-metric-name">{m.metric_name}</span>
-                                <span className="ms-metric-stat">{m.statistic}{m.unit ? ` Â· ${m.unit}` : ""}</span>
+                                <span className="ms-metric-stat">{m.statistic}{m.unit ? ` · ${m.unit}` : ""}</span>
                                 <span className="ms-metric-desc">{m.description}</span>
                                 {m.is_default && <span className="ms-default-tag">recommended</span>}
                               </label>

@@ -13,6 +13,7 @@ CloudWatch metric catalog + per-account metric selection.
 """
 from fastapi import APIRouter, HTTPException, Body, Query, Response
 from app.db import get_connection
+from app.threshold_defaults import DEFAULT_THRESHOLDS, FALLBACK_THRESHOLD
 import datetime
 import json
 import logging
@@ -189,6 +190,66 @@ def get_account_metrics(account_id: int):
     return sorted(grouped.values(), key=lambda g: (g["category"] != "core", g["category"] != "extended", g["display_service"] or ""))
 
 
+def _sync_thresholds_for_selection(cur, account_id: int, enabled_ids: set, disabled_ids: set):
+    """
+    Keep the `thresholds` table aligned with account_metric_selections so
+    Settings -> Metric Thresholds always reflects Settings -> Metrics to
+    Monitor, without a separate manual "Seed defaults" step.
+
+      enabled_ids  -- metric ids now enabled: ensure a threshold row exists
+                       (create with sane defaults if missing) and is turned
+                       on. Never overwrites warn/crit values a user already
+                       customized on an existing row.
+      disabled_ids -- metric ids now disabled: turn their threshold row OFF
+                       (soft-disable, not deleted, so custom values survive
+                       if the metric is re-enabled later).
+
+    Caller is responsible for commit(); this only executes statements on
+    the given cursor so it can be combined with the caller's own writes in
+    one transaction.
+    """
+    if enabled_ids:
+        placeholders = ",".join(["%s"] * len(enabled_ids))
+        cur.execute(
+            f"SELECT metric_id FROM thresholds WHERE aws_account_id = %s AND metric_id IN ({placeholders})",
+            (account_id, *enabled_ids),
+        )
+        existing = {r[0] if not isinstance(r, dict) else r["metric_id"] for r in cur.fetchall()}
+
+        to_create = enabled_ids - existing
+        if to_create:
+            create_placeholders = ",".join(["%s"] * len(to_create))
+            cur.execute(
+                f"SELECT id, service, metric_name FROM metric_catalog WHERE id IN ({create_placeholders})",
+                tuple(to_create),
+            )
+            for row in cur.fetchall():
+                mid, service, metric_name = (row["id"], row["service"], row["metric_name"]) \
+                    if isinstance(row, dict) else row
+                warn, crit, comp = DEFAULT_THRESHOLDS.get(metric_name, FALLBACK_THRESHOLD)
+                cur.execute("""
+                    INSERT IGNORE INTO thresholds
+                      (aws_account_id, resource_type, metric_id,
+                       warning_value, critical_value, comparison, evaluation_period, enabled)
+                    VALUES (%s,%s,%s,%s,%s,%s,5,1)
+                """, (account_id, service, mid, warn, crit, comp))
+
+        to_reenable = enabled_ids & existing
+        if to_reenable:
+            re_placeholders = ",".join(["%s"] * len(to_reenable))
+            cur.execute(
+                f"UPDATE thresholds SET enabled = 1 WHERE aws_account_id = %s AND metric_id IN ({re_placeholders})",
+                (account_id, *to_reenable),
+            )
+
+    if disabled_ids:
+        dis_placeholders = ",".join(["%s"] * len(disabled_ids))
+        cur.execute(
+            f"UPDATE thresholds SET enabled = 0 WHERE aws_account_id = %s AND metric_id IN ({dis_placeholders})",
+            (account_id, *disabled_ids),
+        )
+
+
 @router.put("/api/account-metrics/{account_id}")
 def set_account_metrics(account_id: int, payload: dict = Body(...)):
     """
@@ -228,6 +289,9 @@ def set_account_metrics(account_id: int, payload: dict = Body(...)):
             WHERE aws_account_id = %s AND metric_id IN ({','.join(['%s']*len(to_remove))})
         """, (account_id, *to_remove))
 
+    # Keep Settings -> Metric Thresholds aligned with this selection change.
+    _sync_thresholds_for_selection(cur, account_id, to_add | to_enable, to_remove)
+
     conn.commit(); cur.close(); conn.close()
 
     _write_audit("admin", "Account metric selection updated",
@@ -246,14 +310,28 @@ def apply_default_template(account_id: int):
 
     count = seed_account_defaults(account_id)
 
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    cur.execute("SELECT id FROM metric_catalog WHERE is_default = 1")
+    default_ids = {r["id"] for r in cur.fetchall()}
+    cur.execute(
+        "SELECT metric_id FROM account_metric_selections WHERE aws_account_id = %s AND enabled = 1",
+        (account_id,),
+    )
+    currently_enabled = {r["metric_id"] for r in cur.fetchall()}
+    cur.close()
+
     # Disable anything currently enabled that isn't part of the default set
-    conn = get_connection(); cur = conn.cursor()
+    cur = conn.cursor()
     cur.execute("""
         UPDATE account_metric_selections ams
         JOIN metric_catalog mc ON mc.id = ams.metric_id
         SET ams.enabled = (mc.is_default = 1)
         WHERE ams.aws_account_id = %s
     """, (account_id,))
+
+    # Keep Settings -> Metric Thresholds aligned with the new default selection.
+    _sync_thresholds_for_selection(cur, account_id, default_ids, currently_enabled - default_ids)
+
     conn.commit(); cur.close(); conn.close()
 
     _write_audit("admin", "Applied default metric template", f"account={account_id}")
