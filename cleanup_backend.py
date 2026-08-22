@@ -235,7 +235,7 @@ def step_verify():
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("  Monitoring Hub — Dead Endpoint Cleanup Script")
+    print("  CloudOps — Dead Endpoint Cleanup Script")
     print("=" * 60)
 
     step_backup()

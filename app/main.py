@@ -19,7 +19,7 @@ from app.api.audit_logs     import router as audit_logs_router
 from app.api.metric_catalog import router as metric_catalog_router
 
 from app.ws.manager import ws_manager
-from app.ws.pusher  import redis_listener
+from app.ws.pusher  import redis_listener, stop_listener
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 logger = logging.getLogger(__name__)
@@ -63,14 +63,21 @@ async def lifespan(app):
     # ── Startup ───────────────────────────────────────────────
     threading.Thread(target=_run_collector, daemon=True, name="collector").start()
     threading.Thread(target=_run_describe_poll_loop, daemon=True, name="describe-poll").start()
-    asyncio.create_task(_safe_redis_listener())
+    redis_task = asyncio.create_task(_safe_redis_listener())
     logger.info("Startup complete — collector running, Redis listener started")
     yield
-    # ── Shutdown — daemon thread dies automatically ───────────
+    # ── Shutdown ────────────────────────────────────────────────
     logger.info("Shutting down")
+    stop_listener()
+    redis_task.cancel()
+    try:
+        await asyncio.wait_for(redis_task, timeout=5)
+    except (asyncio.CancelledError, asyncio.TimeoutError):
+        pass
+    logger.info("Redis listener stopped cleanly")
 
 
-app = FastAPI(title="Monitoring Hub API", version="0.3.0", lifespan=lifespan)
+app = FastAPI(title="CloudOps API", version="0.3.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

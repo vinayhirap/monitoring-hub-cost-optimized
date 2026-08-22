@@ -1,6 +1,6 @@
 // monitoring-hub/frontend/src/pages/ServiceDetail.jsx
 import { useEffect, useState, useCallback, useRef } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import {
   ServerIcon, SaveIcon, DatabaseIcon, BucketIcon, PackageIcon, ScaleIcon,
@@ -89,9 +89,38 @@ async function fetchMetrics(service, row, region, hours, accountId) {
   }
 }
 
+// Finds the row that matches a `?resource=` deep-link value coming from
+// the Alerts page, so it can be auto-selected instead of making the user
+// search for it manually.
+function findRowByResource(rows, service, resource) {
+  if (!resource || !Array.isArray(rows) || rows.length === 0) return null;
+
+  if (service === "ECS") {
+    // rows = cluster objects, each with a nested `.services` array
+    for (const cluster of rows) {
+      const svc = (cluster.services || []).find(s => s.service_name === resource);
+      if (svc) return { ...svc, cluster_name: cluster.cluster_name, region: cluster.region };
+    }
+    return null;
+  }
+
+  return rows.find(r => {
+    switch (service) {
+      case "EC2":    return r.instance_id === resource;
+      case "EBS":    return r.volume_id === resource;
+      case "RDS":    return r.db_instance_id === resource || r.identifier === resource;
+      case "Lambda": return r.function_name === resource || r.function_arn === resource;
+      case "S3":     return (r.bucket_name || r.name) === resource;
+      case "ELB":    return r.name === resource || r.load_balancer_arn === resource;
+      default:       return false;
+    }
+  }) || null;
+}
+
 export default function ServiceDetail({ service }) {
   const { id }   = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const meta     = SERVICE_META[service] || SERVICE_META.EC2;
 
   const [account,    setAccount]    = useState(null);
@@ -109,6 +138,7 @@ export default function ServiceDetail({ service }) {
   const [activeAlerts, setActiveAlerts] = useState([]);
   const notImplRef  = useRef(false);
   const selectedRef = useRef(null);
+  const autoSelectedRef = useRef(null);
 
   useEffect(() => {
 fetchAccount(id).then(setAccount).catch(err => {
@@ -187,6 +217,29 @@ fetchAccount(id).then(setAccount).catch(err => {
       setMLoading(false);
     }
   }
+
+  // Deep-link support: if we arrived via Alerts' "📊 Metrics" link
+  // (?resource=vol-xxx), auto-select that row as soon as it's loaded
+  // instead of leaving the user to search for it manually.
+  useEffect(() => {
+    const resourceParam = searchParams.get("resource");
+    if (!resourceParam || rows.length === 0) return;
+    if (autoSelectedRef.current === resourceParam) return; // already handled
+
+    const match = findRowByResource(rows, service, resourceParam);
+    if (match) {
+      autoSelectedRef.current = resourceParam;
+      selectRow(match);
+    }
+  }, [rows, service, searchParams]);
+
+  // Scroll the selected row into view (covers both the deep-link
+  // auto-select above and normal manual clicks).
+  useEffect(() => {
+    if (!selected) return;
+    const el = document.querySelector(".inst-row.inst-selected");
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [selected]);
 
   const stateCounts = rows.reduce((acc, r) => {
     const s = (r.state || r.status || "unknown").toLowerCase();

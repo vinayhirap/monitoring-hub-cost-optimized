@@ -70,11 +70,17 @@ export default function Layout() {
       <aside className="sidebar">
         <div className="sidebar-brand">
           <div className="sidebar-logo">
-            <img src="/aslops_logo.png" alt="ASLOps" width="28" height="28" />
+            <svg width="28" height="28" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" aria-label="CloudOps">
+              <rect width="512" height="512" rx="112" fill="#0b1220" />
+              <g transform="translate(-891.82,2.79) scale(0.8064)">
+                <path fill="#2bb3ac" d="M1331.98,222.58c41.39-41.42,103.91-48.88,152.93-22.35l53.65-53.65c-79.15-54.58-188.41-46.67-258.82,23.77-70.44,70.4-78.35,179.67-23.77,258.82l53.65-53.65c-26.53-49.02-19.07-111.55,22.35-152.93Z" />
+                <path fill="#2bb3ac" d="M1567.06,457.66c70.44-70.44,78.35-179.7,23.73-258.85l-53.65,53.65c26.53,49.02,19.07,111.55-22.32,152.97-41.42,41.39-103.95,48.85-152.93,22.32l-53.65,53.65c79.15,54.62,188.38,46.71,258.82-23.73Z" />
+              </g>
+            </svg>
           </div>
           <div className="sidebar-brand-text">
-            <div className="sidebar-brand-name">Aurionpro</div>
-            <div className="sidebar-brand-sub">LeadNext<br />CloudOps</div>
+            <div className="sidebar-brand-sub">AURIONPRO</div>
+            <div className="sidebar-brand-name">CloudOps</div>
           </div>
         </div>
 

@@ -3,7 +3,7 @@ import { createContext, useContext, useState } from "react";
 
 const AuthContext = createContext(null);
 const BASE = "";
-const STORAGE_KEY = "aslops_auth";
+const STORAGE_KEY = "cloudops_auth";
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => {

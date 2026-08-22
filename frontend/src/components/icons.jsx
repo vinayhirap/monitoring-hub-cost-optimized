@@ -1,5 +1,5 @@
 // src/components/icons.jsx
-// Shared Feather-style line-icon set for Aurionpro LeadNext.
+// Shared Feather-style line-icon set for CloudOps.
 // Convention: 24x24 viewBox, stroke=currentColor, strokeWidth=2, no fill —
 // matches the hand-rolled nav icons in Layout.jsx. Pass `size` (default 16)
 // and any other <svg> prop (className, style, etc.) straight through.

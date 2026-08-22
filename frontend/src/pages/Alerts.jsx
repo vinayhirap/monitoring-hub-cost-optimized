@@ -59,27 +59,42 @@ function playBeep(severity) {
 }
 
 // ── AWS console deep-link ──────────────────────────────────────
-function awsConsoleUrl(resource, region = "") {
-  if (!resource) return null;
-  if (resource.startsWith("i-"))
-    return `https://${region}.console.aws.amazon.com/ec2/home?region=${region}#Instances:instanceId=${resource}`;
-  if (resource.startsWith("vol-"))
-    return `https://${region}.console.aws.amazon.com/ec2/home?region=${region}#Volumes:volumeId=${resource}`;
-  if (resource.includes("lambda") || resource.startsWith("arn:aws:lambda")) {
-    const fn = resource.split(":").pop();
-    return `https://${region}.console.aws.amazon.com/lambda/home?region=${region}#/functions/${fn}`;
-  }
-  if (resource.startsWith("db-") || resource.includes("rds"))
-    return `https://${region}.console.aws.amazon.com/rds/home?region=${region}#database:`;
-  return null;
+// NOTE: We no longer build a raw console.aws.amazon.com URL on the client.
+// A plain URL like that has no account context — clicking it just opens
+// whatever AWS account the browser is already signed into, which is why
+// the button used to land on the WRONG account. Instead we ask the backend
+// for a federated sign-in link scoped to THIS alert's account
+// (see openConsole / GET /alerts/{id}/console-url).
+function hasConsoleTarget(resource) {
+  if (!resource) return false;
+  return (
+    resource.startsWith("i-") ||
+    resource.startsWith("vol-") ||
+    resource.includes("lambda") ||
+    resource.startsWith("arn:aws:lambda") ||
+    resource.startsWith("db-") ||
+    resource.includes("rds")
+  );
 }
 
 // ── Internal resource detail route ─────────────────────────────
-function detailRoute(resource, accountId = 3) {
-  if (!resource) return null;
-  if (resource.startsWith("i-"))   return `/accounts/${accountId}/ec2?resource=${resource}`;
-  if (resource.startsWith("vol-")) return `/accounts/${accountId}/ebs?resource=${resource}`;
-  if (resource.includes("lambda")) return `/accounts/${accountId}/lambda`;
+// Deep-links straight to the resource's row + metrics panel on the
+// ServiceDetail page (which reads the `resource` query param and
+// auto-selects the matching row instead of making the user search).
+const ROUTE_SEGMENT_BY_SERVICE = {
+  ec2: "ec2", ebs: "ebs", rds: "rds", lambda: "lambda",
+  s3: "s3", elb: "elb", ecs: "ecs",
+};
+
+function detailRoute(resource, accountId, service) {
+  if (!resource || !accountId) return null;
+  const seg = ROUTE_SEGMENT_BY_SERVICE[(service || "").toLowerCase()];
+  if (seg) return `/accounts/${accountId}/${seg}?resource=${encodeURIComponent(resource)}`;
+
+  // Fallback if `service` wasn't provided — guess from the resource id shape
+  if (resource.startsWith("i-"))   return `/accounts/${accountId}/ec2?resource=${encodeURIComponent(resource)}`;
+  if (resource.startsWith("vol-")) return `/accounts/${accountId}/ebs?resource=${encodeURIComponent(resource)}`;
+  if (resource.includes("lambda")) return `/accounts/${accountId}/lambda?resource=${encodeURIComponent(resource)}`;
   return null;
 }
 
@@ -112,6 +127,7 @@ export default function Alerts() {
   const [isNOC,   setIsNOC]   = useState(false);
   const [acting,  setActing]  = useState(null);
   const [soundOn, setSoundOn] = useState(true);
+  const [openingConsole, setOpeningConsole] = useState(null);
 
   // IDs already present on page load — never beep for these
   const knownIds = useRef(new Set());
@@ -209,6 +225,28 @@ export default function Alerts() {
       alert("Ack failed: " + e.message);
     } finally {
       setActing(null);
+    }
+  }
+
+  // Opens THIS alert's resource in THIS alert's AWS account. We can't just
+  // link straight to console.aws.amazon.com — that ignores which account
+  // is intended and opens whatever account the browser is already signed
+  // into. Instead we ask the backend for a federated sign-in URL scoped to
+  // the correct account, then open that.
+  async function openConsole(id) {
+    // Open the tab synchronously (on the click) so browsers don't block it
+    // as a popup once the async fetch resolves.
+    const tab = window.open("", "_blank");
+    setOpeningConsole(id);
+    try {
+      const { url } = await apiFetch(`/api/alerts/${id}/console-url`);
+      if (tab) tab.location.href = url;
+      else window.open(url, "_blank", "noopener,noreferrer");
+    } catch (e) {
+      if (tab) tab.close();
+      alert("Couldn't open AWS console: " + e.message);
+    } finally {
+      setOpeningConsole(null);
     }
   }
 
@@ -346,8 +384,9 @@ export default function Alerts() {
                   const sev        = (a.severity || "INFO").toUpperCase();
                   const status     = (a.status   || "active").toLowerCase();
                   const isActing   = acting === a.id;
-                  const route      = detailRoute(a.resource, a.account_id);
-                  const consoleUrl = awsConsoleUrl(a.resource, a.region);
+                  const route      = detailRoute(a.resource, a.account_id, a.service);
+                  const canOpenAws   = hasConsoleTarget(a.resource);
+                  const isOpeningAws = openingConsole === a.id;
 
                   return (
                     <tr key={a.id ?? idx} className={`alert-row sev-row-${sev.toLowerCase()}`}>
@@ -405,17 +444,15 @@ export default function Alerts() {
                               📊 Metrics
                             </button>
                           )}
-                          {consoleUrl && (
-                            <a
-                              href={consoleUrl}
-                              target="_blank"
-                              rel="noreferrer"
+                          {canOpenAws && (
+                            <button
                               className="btn-console-aws"
-                              onClick={e => e.stopPropagation()}
-                              title="Open in AWS Management Console"
+                              disabled={isOpeningAws}
+                              onClick={e => { e.stopPropagation(); openConsole(a.id); }}
+                              title="Open in AWS Management Console (correct account)"
                             >
-                              ☁ Console
-                            </a>
+                              {isOpeningAws ? "☁ Opening…" : "☁ Console"}
+                            </button>
                           )}
                         </div>
                       </td>

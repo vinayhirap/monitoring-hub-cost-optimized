@@ -5,6 +5,7 @@ import time
 import logging
 from fastapi import APIRouter, HTTPException
 from app.db import get_connection
+from app.aws.federation import build_federated_console_url, resource_console_destination
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +131,48 @@ def open_alerts():
                 r[field] = r[field].rstrip("+00:00").rstrip(" UTC") + "Z"
 
     return rows
+
+
+# ── AWS CONSOLE DEEP-LINK (account-correct) ────────────────────
+@router.get("/{alert_id}/console-url")
+def get_console_url(alert_id: int):
+    """
+    Returns a federated sign-in URL that opens THIS alert's resource in
+    THIS alert's AWS account — regardless of which account the operator's
+    browser currently happens to be signed into.
+    """
+    conn   = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("""
+        SELECT
+            a.resource_id                          AS resource,
+            COALESCE(a.region, acc.default_region) AS region,
+            acc.account_id                         AS aws_account_id,
+            acc.role_arn,
+            acc.external_id
+        FROM alerts a
+        JOIN resources r      ON r.resource_id = a.resource_id
+        JOIN aws_accounts acc ON acc.id = r.aws_account_id
+        WHERE a.id = %s
+    """, (alert_id,))
+    row = cursor.fetchone()
+    cursor.close()
+    conn.close()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    if not row.get("role_arn"):
+        raise HTTPException(status_code=400, detail="No AWS role configured for this account")
+
+    destination = resource_console_destination(row["resource"], row["region"])
+
+    try:
+        url = build_federated_console_url(row["role_arn"], row["external_id"], destination)
+    except Exception:
+        logger.exception("Failed to build federated console URL for alert %s", alert_id)
+        raise HTTPException(status_code=502, detail="Could not generate AWS console link")
+
+    return {"url": url, "account_id": row["aws_account_id"]}
 
 
 # ── ACK ───────────────────────────────────────────────────────

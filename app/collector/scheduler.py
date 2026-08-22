@@ -28,7 +28,6 @@ CRITICAL_INTERVAL  = 120    #  2 min — EC2 CPU, RDS, ELB
 STANDARD_INTERVAL  = 300    #  5 min — + EBS, Lambda Errors
 LOW_INTERVAL       = 900    # 15 min — EC2 Disk, Lambda Invocations
 DISCOVERY_INTERVAL = 900    # 15 min — aligned with low tier
-PARTITION_INTERVAL = 86400  # daily
 
 
 def _get_active_accounts():
@@ -44,50 +43,6 @@ def _get_active_accounts():
     cursor.close()
     conn.close()
     return rows
-
-
-def _ensure_next_partition():
-    try:
-        from datetime import date
-
-        conn   = get_connection()
-        cursor = conn.cursor()
-
-        today = date.today()
-        if today.month == 12:
-            next_year, next_month = today.year + 1, 1
-        else:
-            next_year, next_month = today.year, today.month + 1
-
-        if next_month == 12:
-            bound_year, bound_month = next_year + 1, 1
-        else:
-            bound_year, bound_month = next_year, next_month + 1
-
-        partition_name = f"p{next_year}_{next_month:02d}"
-        bound_date     = f"{bound_year}-{bound_month:02d}-01"
-
-        cursor.execute("""
-            SELECT PARTITION_NAME FROM information_schema.PARTITIONS
-            WHERE TABLE_SCHEMA = DATABASE()
-              AND TABLE_NAME   = 'metrics'
-              AND PARTITION_NAME = %s
-        """, (partition_name,))
-
-        if not cursor.fetchone():
-            cursor.execute(f"""
-                ALTER TABLE metrics REORGANIZE PARTITION p_future INTO (
-                    PARTITION {partition_name} VALUES LESS THAN (TO_DAYS('{bound_date}')),
-                    PARTITION p_future VALUES LESS THAN MAXVALUE
-                )
-            """)
-            conn.commit()
-            logger.info(f"Added partition: {partition_name}")
-
-        cursor.close()
-        conn.close()
-    except Exception as e:
-        logger.error(f"Partition error: {e}")
 
 
 def run_once(tier="standard"):
@@ -127,7 +82,6 @@ def run_loop():
     last_standard   = 0
     last_low        = 0
     last_discovery  = 0
-    last_partition  = 0
     cycle           = 0
 
     logger.info("Tiered scheduler started "
@@ -169,13 +123,6 @@ def run_loop():
                 last_discovery = now
             except Exception as e:
                 logger.error(f"Discovery error: {e}")
-
-        if now - last_partition >= PARTITION_INTERVAL:
-            try:
-                _ensure_next_partition()
-                last_partition = now
-            except Exception as e:
-                logger.error(f"Partition error: {e}")
 
         # Sleep until next critical cycle
         elapsed = time.time() - now

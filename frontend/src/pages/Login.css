@@ -98,6 +98,21 @@
   width: auto;
   flex-shrink: 0;
 }
+.login-logo-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.login-wordmark {
+  font-size: 22px;
+  font-weight: 700;
+  color: #e2e8f0;
+  letter-spacing: 0.01em;
+  font-family: 'JetBrains Mono', monospace;
+}
+.login-wordmark-accent {
+  color: #2bb3ac;
+}
 .login-brand-sub {
   font-size: 10px;
   color: rgba(99, 130, 190, 0.7);
