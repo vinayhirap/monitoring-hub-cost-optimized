@@ -33,17 +33,45 @@ def compare(value, threshold, op):
     return ops.get(op, False)
 
 
+def _auto_resolve_stale_alerts(cursor):
+    """
+    Resolve alerts whose account has been removed/deactivated (e.g. via
+    delete_account). This is deliberately narrow: it only fires when the
+    account itself is gone/inactive, NOT just because metrics haven't
+    arrived recently.
+
+    Do NOT resolve alerts purely because metrics stopped flowing for a
+    still-active account (collector down, VictoriaMetrics outage, network
+    blip, or simply not running in this environment). Missing data should
+    never silently clear an alert in a monitoring tool — that masks real
+    incidents instead of surfacing them. "No data" is a signal to
+    investigate the pipeline, not a reason to mark something resolved.
+    """
+    cursor.execute("""
+        UPDATE alerts a
+        JOIN resources r
+            ON r.resource_id = a.resource_id
+        LEFT JOIN aws_accounts aa
+            ON aa.id = r.aws_account_id
+           AND aa.status = 'active'
+        SET a.status      = 'resolved',
+            a.resolved_at = NOW()
+        WHERE a.status = 'active'
+          AND aa.id IS NULL
+    """)
+    return cursor.rowcount
+
+
 def evaluate_alerts():
     conn   = get_connection()
     cursor = conn.cursor(dictionary=True)
 
+    stale_resolved = _auto_resolve_stale_alerts(cursor)
+    conn.commit()
+    if stale_resolved:
+        logger.info(f"Auto-resolved {stale_resolved} stale alert(s) (account removed or resource stopped reporting)")
+
     # ── Fetch latest metric per resource+metric combo ─────────
-    # `metrics` is a last-value cache (one row per resource+metric,
-    # upserted by metrics_writer.py) not a history table, so no
-    # "latest timestamp" subquery is needed anymore — every row already
-    # IS the latest value. We still filter on metric_timestamp so a
-    # stale/stuck value (VM sync stopped working) doesn't keep firing
-    # or silently resolving alerts.
     # Joins resources → thresholds → metric_catalog
     # Only evaluates metrics that have a threshold configured
     cursor.execute("""
@@ -64,6 +92,9 @@ def evaluate_alerts():
         FROM metrics m
         JOIN resources r
             ON r.id = m.resource_id
+        JOIN aws_accounts aa
+            ON aa.id = r.aws_account_id
+           AND aa.status = 'active'
         JOIN metric_catalog mc
             ON mc.metric_name = m.metric_name
         JOIN thresholds t
@@ -71,6 +102,14 @@ def evaluate_alerts():
            AND t.resource_type   = r.resource_type
            AND t.aws_account_id  = r.aws_account_id
            AND t.enabled         = 1
+        JOIN (
+            SELECT resource_id, metric_name, MAX(metric_timestamp) AS ts
+            FROM metrics
+            GROUP BY resource_id, metric_name
+        ) latest
+            ON latest.resource_id = m.resource_id
+           AND latest.metric_name = m.metric_name
+           AND latest.ts          = m.metric_timestamp
         WHERE m.metric_timestamp >= DATE_SUB(NOW(), INTERVAL 10 MINUTE)
     """)
 

@@ -43,9 +43,9 @@ def _fetch_alerts_from_db():
             acc.account_name,
             acc.id                                 AS account_id
         FROM alerts a
-        LEFT JOIN resources r      ON r.resource_id = a.resource_id
-        LEFT JOIN aws_accounts acc ON acc.id = r.aws_account_id                   
-
+        JOIN resources r      ON r.resource_id = a.resource_id
+        JOIN aws_accounts acc ON acc.id = r.aws_account_id
+                               AND acc.status = 'active'
         ORDER BY a.triggered_at DESC
         LIMIT 200
     """)
@@ -109,8 +109,9 @@ def open_alerts():
             acc.id                                 AS account_id,
             COALESCE(a.region, acc.default_region) AS region
         FROM alerts a
-        LEFT JOIN resources r      ON r.resource_id = a.resource_id
-        LEFT JOIN aws_accounts acc ON acc.id = r.aws_account_id
+        JOIN resources r      ON r.resource_id = a.resource_id
+        JOIN aws_accounts acc ON acc.id = r.aws_account_id
+                               AND acc.status = 'active'
         WHERE a.resolved_at IS NULL
             ORDER BY
             FIELD(a.severity, 'CRITICAL', 'WARNING', 'INFO'),

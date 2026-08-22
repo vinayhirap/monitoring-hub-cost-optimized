@@ -163,6 +163,22 @@ def delete_account(account_id: int):
         "UPDATE aws_accounts SET status = 'inactive' WHERE id = %s",
         (account_id,)
     )
+
+    # Clean up everything this account left behind so it can't show up
+    # as stale/orphaned alerts later (this was previously a bug — removed
+    # accounts left their resources/metrics/alerts behind indefinitely).
+    cursor.execute("""
+        DELETE a FROM alerts a
+        JOIN resources r ON r.resource_id = a.resource_id
+        WHERE r.aws_account_id = %s
+    """, (account_id,))
+    cursor.execute("""
+        DELETE m FROM metrics m
+        JOIN resources r ON r.id = m.resource_id
+        WHERE r.aws_account_id = %s
+    """, (account_id,))
+    cursor.execute("DELETE FROM resources WHERE aws_account_id = %s", (account_id,))
+
     conn.commit()
     cursor.close()
     conn.close()
