@@ -51,13 +51,19 @@ CREATE TABLE resources (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- METRICS (THIS TABLE WAS THE PROBLEM)
+-- METRICS -- LAST-VALUE CACHE ONLY.
+-- One row per (resource_id, metric_name), upserted by
+-- app/collector/metrics_writer.py from VictoriaMetrics. This is NOT a
+-- time-series store -- all history lives in VictoriaMetrics. This table
+-- exists purely so alert_evaluator.py can join against `thresholds` in
+-- SQL without a VM round trip per check. See db/migrations/004_metrics_last_value_only.sql.
 CREATE TABLE metrics (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   resource_id BIGINT NOT NULL,
   metric_name VARCHAR(100) NOT NULL,
-  last_value DOUBLE,
-  last_timestamp DATETIME
+  metric_value DOUBLE,
+  metric_timestamp DATETIME,
+  UNIQUE KEY uniq_metrics_resource_metric (resource_id, metric_name)
 );
 
 -- THRESHOLDS

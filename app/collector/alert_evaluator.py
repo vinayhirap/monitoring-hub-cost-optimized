@@ -38,6 +38,12 @@ def evaluate_alerts():
     cursor = conn.cursor(dictionary=True)
 
     # ── Fetch latest metric per resource+metric combo ─────────
+    # `metrics` is a last-value cache (one row per resource+metric,
+    # upserted by metrics_writer.py) not a history table, so no
+    # "latest timestamp" subquery is needed anymore — every row already
+    # IS the latest value. We still filter on metric_timestamp so a
+    # stale/stuck value (VM sync stopped working) doesn't keep firing
+    # or silently resolving alerts.
     # Joins resources → thresholds → metric_catalog
     # Only evaluates metrics that have a threshold configured
     cursor.execute("""
@@ -65,14 +71,6 @@ def evaluate_alerts():
            AND t.resource_type   = r.resource_type
            AND t.aws_account_id  = r.aws_account_id
            AND t.enabled         = 1
-        JOIN (
-            SELECT resource_id, metric_name, MAX(metric_timestamp) AS ts
-            FROM metrics
-            GROUP BY resource_id, metric_name
-        ) latest
-            ON latest.resource_id = m.resource_id
-           AND latest.metric_name = m.metric_name
-           AND latest.ts          = m.metric_timestamp
         WHERE m.metric_timestamp >= DATE_SUB(NOW(), INTERVAL 10 MINUTE)
     """)
 

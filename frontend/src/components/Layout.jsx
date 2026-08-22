@@ -70,7 +70,7 @@ export default function Layout() {
       <aside className="sidebar">
         <div className="sidebar-brand">
           <div className="sidebar-logo">
-            <img src="/aurionpro-mark.svg" alt="Aurionpro" width="28" height="28" />
+            <img src="/aslops_logo.png" alt="ASLOps" width="28" height="28" />
           </div>
           <div className="sidebar-brand-text">
             <div className="sidebar-brand-name">Aurionpro</div>

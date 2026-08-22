@@ -189,6 +189,64 @@
 }
 .login-toggle-pw:hover { color: rgba(99, 130, 190, 0.9); }
 
+/* ── plain (no icon) input variant ── */
+.login-input-plain {
+  padding-left: 12px;
+}
+
+/* ── forgot/change links row ── */
+.login-links-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: -6px;
+}
+.login-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  color: rgba(43,179,172, 0.85);
+  cursor: pointer;
+  text-decoration: none;
+  transition: color 0.15s;
+}
+.login-link:hover { color: #2bb3ac; text-decoration: underline; }
+.login-link-back {
+  margin-top: 4px;
+  align-self: flex-start;
+  color: rgba(99, 130, 190, 0.75);
+}
+.login-link-back:hover { color: #e2e8f0; }
+
+/* ── info / status banner ── */
+.login-info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: rgba(43,179,172, 0.08);
+  border: 1px solid rgba(43,179,172, 0.25);
+  border-radius: 7px;
+  color: #7fd8d2;
+  font-size: 12px;
+  padding: 10px 12px;
+  font-family: -apple-system, 'Segoe UI', sans-serif;
+  line-height: 1.5;
+}
+.login-token-box { margin-bottom: 4px; }
+.login-token-code {
+  display: block;
+  word-break: break-all;
+  background: rgba(5, 12, 24, 0.8);
+  border: 1px solid rgba(43,179,172, 0.2);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: #e2e8f0;
+}
+
 /* ── error ── */
 .login-error {
   display: flex;
